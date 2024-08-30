@@ -123,6 +123,10 @@ endif()
 
 include(set_compile_flags)
 
+if(ERF_ENABLE_MULTIBLOCK)
+    target_compile_definitions(${amr_wind_lib_name} PUBLIC ERF_USE_MULTIBLOCK)
+endif()
+
 if(AMR_WIND_ENABLE_NETCDF)
   set(CMAKE_PREFIX_PATH ${NETCDF_DIR} ${CMAKE_PREFIX_PATH})
   find_package(NetCDF REQUIRED)

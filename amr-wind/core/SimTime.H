@@ -4,6 +4,7 @@
 #include "AMReX_REAL.H"
 #include "AMReX_GpuQualifiers.H"
 #include "AMReX_Extension.H"
+#include "AMReX_Vector.H"
 #include <algorithm>
 #include <cmath>
 
@@ -80,22 +81,22 @@ public:
     void set_restart_time(int tidx, amrex::Real time);
 
     AMREX_FORCE_INLINE
-    amrex::Real deltaT() const { return m_dt[0]; }
+    amrex::Real delta_t() const { return m_dt[0]; }
 
     AMREX_FORCE_INLINE
-    amrex::Real& deltaT() { return m_dt[0]; }
+    amrex::Real& delta_t() { return m_dt[0]; }
 
     AMREX_FORCE_INLINE
-    amrex::Real deltaTNm1() const { return m_dt[1]; }
+    amrex::Real delta_t_nm1() const { return m_dt[1]; }
 
     AMREX_FORCE_INLINE
-    amrex::Real deltaTNm2() const { return m_dt[2]; }
+    amrex::Real delta_t_nm2() const { return m_dt[2]; }
 
     AMREX_FORCE_INLINE
-    amrex::Real& deltaTNm1() { return m_dt[1]; }
+    amrex::Real& delta_t_nm1() { return m_dt[1]; }
 
     AMREX_FORCE_INLINE
-    amrex::Real& deltaTNm2() { return m_dt[2]; }
+    amrex::Real& delta_t_nm2() { return m_dt[2]; }
 
     AMREX_FORCE_INLINE
     amrex::Real current_time() const { return m_cur_time; }
@@ -144,7 +145,8 @@ public:
 
 private:
     //! Timestep sizes
-    amrex::Real m_dt[max_time_states]{0.0};
+    amrex::Vector<amrex::Real> m_dt =
+        amrex::Vector<amrex::Real>(max_time_states, 0.0);
 
     //! Current simulation time
     amrex::Real m_cur_time{0.0};
@@ -161,10 +163,10 @@ private:
     //! Maximum CFL constraint
     amrex::Real m_max_cfl{0.5};
 
-    //! Fixed deltaT indicated by user
+    //! Fixed delta_t indicated by user
     amrex::Real m_fixed_dt{-1.0};
 
-    //! Initial deltaT indicated by user
+    //! Initial delta_t indicated by user
     amrex::Real m_initial_dt{-1.0};
 
     //! Current CFL

@@ -21,7 +21,7 @@ private:
     DeviceVecList m_epsilon;
     DeviceTensorList m_orientation;
 
-    bool init_old{false};
+    bool m_init_old{false};
 
     void copy_to_device();
 
@@ -56,7 +56,7 @@ void ActSrcOp<ActTrait, ActSrcLine>::copy_to_device()
     const auto& grid = m_data.grid();
 
     // Populate old positions before new positions are updated
-    if (init_old) {
+    if (m_init_old) {
         amrex::Gpu::copy(
             amrex::Gpu::deviceToDevice, m_pos.begin(), m_pos.end(),
             m_pos_old.begin());
@@ -75,11 +75,11 @@ void ActSrcOp<ActTrait, ActSrcLine>::copy_to_device()
         amrex::Gpu::hostToDevice, grid.orientation.begin(),
         grid.orientation.end(), m_orientation.begin());
 
-    if (!init_old) {
+    if (!m_init_old) {
         amrex::Gpu::copy(
             amrex::Gpu::hostToDevice, grid.pos.begin(), grid.pos.end(),
             m_pos_old.begin());
-        init_old = true;
+        m_init_old = true;
     }
 }
 
@@ -91,6 +91,14 @@ void ActSrcOp<ActTrait, ActSrcLine>::operator()(
     BL_PROFILE("amr-wind::ActSrcOp<" + fname + ">");
 
     const auto& bx = mfi.tilebox();
+
+    const auto bxa =
+        amr_wind::utils::realbox_to_box(m_data.info().bound_box, geom);
+    const auto& bxi = bx & bxa;
+    if (bxi.isEmpty()) {
+        return;
+    }
+
     const auto& sarr = m_act_src(lev).array(mfi);
     const auto& problo = geom.ProbLoArray();
     const auto& dx = geom.CellSizeArray();
@@ -102,6 +110,8 @@ void ActSrcOp<ActTrait, ActSrcLine>::operator()(
     const auto* eps = m_epsilon.data();
     const auto* tmat = m_orientation.data();
 
+    const auto dcoord_flags = m_data.grid().dcoord_flags;
+
     amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept {
         const vs::Vector cc{
             problo[0] + (i + 0.5) * dx[0],
@@ -109,13 +119,16 @@ void ActSrcOp<ActTrait, ActSrcLine>::operator()(
             problo[2] + (k + 0.5) * dx[2],
         };
 
-        amrex::Real src_force[AMREX_SPACEDIM]{0.0, 0.0, 0.0};
+        amrex::RealArray src_force = {0.0};
         for (int ip = 0; ip < npts; ++ip) {
             // Put force at n+1/2 location for Godunov
             constexpr amrex::Real wt = 0.5;
             const auto pos_ip = wt * pos[ip] + (1.0 - wt) * opos[ip];
             const auto dist = cc - pos_ip;
-            const auto dist_local = tmat[ip] & dist;
+            // Convert to local (chord, span, thickness) coords
+            const auto dist_local_3D = tmat[ip] & dist;
+            // In local coords, zero disabled distances (e.g., for 2D)
+            const auto dist_local = dist_local_3D * dcoord_flags;
             const auto gauss_fac = utils::gaussian3d(dist_local, eps[ip]);
             const auto& pforce = force[ip];
 

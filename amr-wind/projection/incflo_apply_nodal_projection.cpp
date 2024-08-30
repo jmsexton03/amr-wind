@@ -4,33 +4,40 @@
 #include "amr-wind/core/MLMGOptions.H"
 #include "amr-wind/utilities/console_io.H"
 #include "amr-wind/core/field_ops.H"
-#include "amr-wind/wind_energy/ABL.H"
+#include "amr-wind/projection/nodal_projection_ops.H"
+#include "hydro_utils.H"
 
 using namespace amrex;
 
-void incflo::set_inflow_velocity(
-    int lev, amrex::Real time, MultiFab& vel, int nghost)
+void amr_wind::nodal_projection::set_inflow_velocity(
+    amr_wind::PhysicsMgr& phy_mgr,
+    amr_wind::Field& vel_fld,
+    int lev,
+    amrex::Real time,
+    MultiFab& vel_mfab,
+    int nghost)
 {
-    auto& lvelocity = icns().fields().field;
-    lvelocity.set_inflow(lev, time, vel, nghost);
+    vel_fld.set_inflow(lev, time, vel_mfab, nghost);
 
     // TODO fix hack for ABL
-    auto& phy_mgr = m_sim.physics_manager();
     if (phy_mgr.contains("ABL")) {
         auto& abl = phy_mgr.get<amr_wind::ABL>();
         const auto& bndry_plane = abl.bndry_plane();
-        bndry_plane.populate_data(lev, time, lvelocity, vel);
-        abl.abl_mpl().set_velocity(lev, time, lvelocity, vel);
+        bndry_plane.populate_data(lev, time, vel_fld, vel_mfab);
+        abl.abl_mpl().set_velocity(lev, time, vel_fld, vel_mfab);
     }
 }
 
 Array<amrex::LinOpBCType, AMREX_SPACEDIM>
-incflo::get_projection_bc(Orientation::Side side) const noexcept
+amr_wind::nodal_projection::get_projection_bc(
+    Orientation::Side side,
+    amr_wind::Field& pressure,
+    const Array<int, AMREX_SPACEDIM>& is_periodic)
 {
-    const auto& bctype = pressure().bc_type();
+    const auto& bctype = pressure.bc_type();
     Array<LinOpBCType, AMREX_SPACEDIM> r;
     for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
-        if (geom[0].isPeriodic(dir)) {
+        if (is_periodic[dir] == 1) {
             r[dir] = LinOpBCType::Periodic;
         } else {
             auto bc = bctype[Orientation(dir, side)];
@@ -40,6 +47,7 @@ incflo::get_projection_bc(Orientation::Side side) const noexcept
                 r[dir] = LinOpBCType::Dirichlet;
                 break;
             }
+            case BC::mass_inflow_outflow:
             case BC::mass_inflow: {
                 r[dir] = LinOpBCType::inflow;
                 break;
@@ -51,6 +59,40 @@ incflo::get_projection_bc(Orientation::Side side) const noexcept
         }
     }
     return r;
+}
+
+void amr_wind::nodal_projection::apply_dirichlet_vel(
+    amrex::MultiFab& mf_velocity, amrex::iMultiFab& mf_iblank)
+{
+    const auto& vel = mf_velocity.arrays();
+    const auto& iblank = mf_iblank.const_arrays();
+
+    amrex::ParallelFor(
+        mf_velocity, mf_velocity.n_grow, mf_velocity.n_comp,
+        [=] AMREX_GPU_DEVICE(int nbx, int i, int j, int k, int n) noexcept {
+            // Pure solid-body points
+            if (iblank[nbx](i, j, k) == 0) {
+                // Set velocity to 0 for now
+                vel[nbx](i, j, k, n) = 0.0;
+            }
+        });
+}
+
+void amr_wind::nodal_projection::enforce_inout_solvability(
+    amr_wind::Field& velocity,
+    const Vector<Geometry>& geom,
+    const int num_levels)
+{
+    BCRec const* bc_type = velocity.bcrec_device().data();
+    Vector<Array<MultiFab*, AMREX_SPACEDIM>> vel_vec(num_levels);
+
+    for (int lev = 0; lev < num_levels; ++lev) {
+        vel_vec[lev][0] = new MultiFab(velocity(lev), amrex::make_alias, 0, 1);
+        vel_vec[lev][1] = new MultiFab(velocity(lev), amrex::make_alias, 1, 1);
+        vel_vec[lev][2] = new MultiFab(velocity(lev), amrex::make_alias, 2, 1);
+    }
+
+    HydroUtils::enforceInOutSolvability(vel_vec, bc_type, geom, true);
 }
 
 /** Perform nodal projection
@@ -116,7 +158,7 @@ void incflo::ApplyProjection(
     // projects (U^*-U^n + dt Gp) rather than (U^* + dt Gp)
 
     bool proj_for_small_dt =
-        (time > 0.0 and m_time.deltaT() < 0.1 * m_time.deltaTNm1());
+        (time > 0.0 and m_time.delta_t() < 0.1 * m_time.delta_t_nm1());
 
     if (m_verbose > 2) {
         if (proj_for_small_dt) {
@@ -142,8 +184,9 @@ void incflo::ApplyProjection(
             ? &(m_repo.get_mesh_mapping_field(amr_wind::FieldLoc::CELL))
             : nullptr;
     amr_wind::Field const* mesh_detJ =
-        mesh_mapping ? &(m_repo.get_mesh_mapping_detJ(amr_wind::FieldLoc::CELL))
-                     : nullptr;
+        mesh_mapping
+            ? &(m_repo.get_mesh_mapping_det_j(amr_wind::FieldLoc::CELL))
+            : nullptr;
     const auto* ref_density =
         is_anelastic ? &(m_repo.get_field("reference_density")) : nullptr;
 
@@ -165,7 +208,7 @@ void incflo::ApplyProjection(
         for (int lev = 0; lev <= finest_level; lev++) {
 
 #ifdef AMREX_USE_OMP
-#pragma omp parallel if (Gpu::notInLaunchRegion())
+#pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
 #endif
             for (MFIter mfi(velocity(lev), TilingIfNotGPU()); mfi.isValid();
                  ++mfi) {
@@ -200,7 +243,7 @@ void incflo::ApplyProjection(
         // Create the Surface tension forcing term (Cell-centered)
         for (int lev = 0; lev <= finest_level; ++lev) {
 #ifdef AMREX_USE_OMP
-#pragma omp parallel if (Gpu::notInLaunchRegion())
+#pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
 #endif
             {
                 amrex::MultiFab surf_tens_force;
@@ -256,7 +299,7 @@ void incflo::ApplyProjection(
             sigma[lev].define(
                 grids[lev], dmap[lev], ncomp, 0, MFInfo(), Factory(lev));
 #ifdef AMREX_USE_OMP
-#pragma omp parallel if (Gpu::notInLaunchRegion())
+#pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
 #endif
             for (MFIter mfi(sigma[lev], TilingIfNotGPU()); mfi.isValid();
                  ++mfi) {
@@ -293,23 +336,41 @@ void incflo::ApplyProjection(
     // Perform projection
     std::unique_ptr<Hydro::NodalProjector> nodal_projector;
 
-    auto bclo = get_projection_bc(Orientation::low);
-    auto bchi = get_projection_bc(Orientation::high);
+    auto bclo = amr_wind::nodal_projection::get_projection_bc(
+        Orientation::low, pressure, m_sim.mesh().Geom()[0].isPeriodic());
+    auto bchi = amr_wind::nodal_projection::get_projection_bc(
+        Orientation::high, pressure, m_sim.mesh().Geom()[0].isPeriodic());
 
     Vector<MultiFab*> vel;
     for (int lev = 0; lev <= finest_level; ++lev) {
         vel.push_back(&(velocity(lev)));
         vel[lev]->setBndry(0.0);
         if (!proj_for_small_dt and !incremental) {
-            set_inflow_velocity(lev, time, *vel[lev], 1);
+            amr_wind::nodal_projection::set_inflow_velocity(
+                m_sim.physics_manager(), velocity, lev, time, *vel[lev], 1);
+
+            // fill periodic boundaries to avoid corner cell issues
+            vel[lev]->FillBoundary(geom[lev].periodicity());
         }
+    }
+
+    // Need to apply custom Neumann funcs for inflow-outflow BC
+    // after setting the inflow vels above
+    // and then enforce solvability by matching outflow to inflow.
+    if (!proj_for_small_dt and !incremental and velocity.has_inout_bndry()) {
+        velocity.apply_bc_funcs(amr_wind::FieldState::New);
+
+        amr_wind::nodal_projection::enforce_inout_solvability(
+            velocity, m_repo.mesh().Geom(), m_repo.num_active_levels());
     }
 
     if (is_anelastic) {
         for (int lev = 0; lev <= finest_level; ++lev) {
-            amrex::Multiply(
-                velocity(lev), (*ref_density)(lev), 0, 0, density[lev]->nComp(),
-                0);
+            for (int idim = 0; idim < velocity.num_comp(); ++idim) {
+                amrex::Multiply(
+                    velocity(lev), (*ref_density)(lev), 0, idim,
+                    density[lev]->nComp(), 0);
+            }
         }
     }
 
@@ -349,8 +410,37 @@ void incflo::ApplyProjection(
         nodal_projector->setCustomRHS(div_vel_rhs->vec_const_ptrs());
     }
 
-    // Setup masking for overset simulations
+    // Determine if nodal projection should be coupled for overset
+    bool disable_ovst_nodal = false;
     if (sim().has_overset()) {
+        amrex::ParmParse pp("Overset");
+        pp.query("disable_coupled_nodal_proj", disable_ovst_nodal);
+    }
+
+    if ((sim().has_overset() && disable_ovst_nodal)) {
+        // Similar approach to immersed boundary (ib) above
+        auto& iblank = m_repo.get_int_field("iblank_cell");
+        for (int lev = 0; lev <= finest_level; lev++) {
+            amr_wind::nodal_projection::apply_dirichlet_vel(
+                velocity(lev), iblank(lev));
+        }
+        amrex::Gpu::synchronize();
+        auto div_vel_rhs =
+            sim().repo().create_scratch_field(1, 0, amr_wind::FieldLoc::NODE);
+        nodal_projector->computeRHS(div_vel_rhs->vec_ptrs(), vel, {}, {});
+        // Mask the right-hand side of the Poisson solve for the nodes inside
+        // the body
+        const auto& imask_node = repo().get_int_field("mask_node");
+        for (int lev = 0; lev <= finest_level; ++lev) {
+            amrex::MultiFab::Multiply(
+                *div_vel_rhs->vec_ptrs()[lev],
+                amrex::ToMultiFab(imask_node(lev)), 0, 0, 1, 0);
+        }
+        nodal_projector->setCustomRHS(div_vel_rhs->vec_const_ptrs());
+    }
+
+    // Setup masking for overset simulations
+    if (sim().has_overset() && !disable_ovst_nodal) {
         auto& linop = nodal_projector->getLinOp();
         const auto& imask_node = repo().get_int_field("mask_node");
         for (int lev = 0; lev <= finest_level; ++lev) {
@@ -358,7 +448,7 @@ void incflo::ApplyProjection(
         }
     }
 
-    if (m_sim.has_overset()) {
+    if (m_sim.has_overset() && !disable_ovst_nodal) {
         auto phif = m_repo.create_scratch_field(1, 1, amr_wind::FieldLoc::NODE);
         if (incremental) {
             for (int lev = 0; lev <= finestLevel(); ++lev) {
@@ -379,9 +469,11 @@ void incflo::ApplyProjection(
 
     if (is_anelastic) {
         for (int lev = 0; lev <= finest_level; ++lev) {
-            amrex::Divide(
-                velocity(lev), (*ref_density)(lev), 0, 0, density[lev]->nComp(),
-                0);
+            for (int idim = 0; idim < velocity.num_comp(); ++idim) {
+                amrex::Divide(
+                    velocity(lev), (*ref_density)(lev), 0, idim,
+                    density[lev]->nComp(), 0);
+            }
         }
     }
 
@@ -405,7 +497,7 @@ void incflo::ApplyProjection(
     for (int lev = 0; lev <= finest_level; lev++) {
 
 #ifdef AMREX_USE_OMP
-#pragma omp parallel if (Gpu::notInLaunchRegion())
+#pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
 #endif
         for (MFIter mfi(grad_p(lev), TilingIfNotGPU()); mfi.isValid(); ++mfi) {
             Box const& tbx = mfi.tilebox();
@@ -452,6 +544,14 @@ void incflo::ApplyProjection(
             grad_p(lev + 1), grad_p(lev), 0, AMREX_SPACEDIM, refRatio(lev));
     }
 
+    if (sim().has_overset() && disable_ovst_nodal) {
+        auto& iblank = m_repo.get_int_field("iblank_cell");
+        for (int lev = 0; lev <= finest_level; lev++) {
+            amr_wind::nodal_projection::apply_dirichlet_vel(
+                velocity(lev), iblank(lev));
+        }
+    }
+
     velocity.fillpatch(m_time.new_time());
     if (m_verbose > 2) {
         if (proj_for_small_dt) {
@@ -460,142 +560,4 @@ void incflo::ApplyProjection(
             PrintMaxValues("after projection");
         }
     }
-}
-
-void incflo::UpdateGradP(
-    Vector<MultiFab const*> density, Real /*time*/, Real scaling_factor)
-{
-    BL_PROFILE("amr-wind::incflo::UpdateGradP");
-
-    // Pressure and sigma are necessary to calculate the pressure gradient
-
-    const bool is_anelastic = m_sim.is_anelastic();
-    const bool variable_density =
-        (!m_sim.pde_manager().constant_density() ||
-         m_sim.physics_manager().contains("MultiPhase"));
-
-    bool mesh_mapping = m_sim.has_mesh_mapping();
-
-    auto& grad_p = m_repo.get_field("gp");
-    auto& pressure = m_repo.get_field("p");
-    auto& velocity = icns().fields().field;
-    amr_wind::Field const* mesh_fac =
-        mesh_mapping
-            ? &(m_repo.get_mesh_mapping_field(amr_wind::FieldLoc::CELL))
-            : nullptr;
-    amr_wind::Field const* mesh_detJ =
-        mesh_mapping ? &(m_repo.get_mesh_mapping_detJ(amr_wind::FieldLoc::CELL))
-                     : nullptr;
-    const auto* ref_density =
-        is_anelastic ? &(m_repo.get_field("reference_density")) : nullptr;
-
-    // ASA does not think we actually need to define sigma here. It
-    // should not be used by calcGradPhi
-
-    // Create sigma while accounting for mesh mapping
-    // sigma = 1/(fac^2)*J * dt/rho
-    Vector<amrex::MultiFab> sigma(finest_level + 1);
-    if (variable_density || mesh_mapping) {
-        int ncomp = mesh_mapping ? AMREX_SPACEDIM : 1;
-        for (int lev = 0; lev <= finest_level; ++lev) {
-            sigma[lev].define(
-                grids[lev], dmap[lev], ncomp, 0, MFInfo(), Factory(lev));
-#ifdef AMREX_USE_OMP
-#pragma omp parallel if (Gpu::notInLaunchRegion())
-#endif
-            for (MFIter mfi(sigma[lev], TilingIfNotGPU()); mfi.isValid();
-                 ++mfi) {
-                Box const& bx = mfi.tilebox();
-                Array4<Real> const& sig = sigma[lev].array(mfi);
-                Array4<Real const> const& rho = density[lev]->const_array(mfi);
-                amrex::Array4<amrex::Real const> fac =
-                    mesh_mapping ? ((*mesh_fac)(lev).const_array(mfi))
-                                 : amrex::Array4<amrex::Real const>();
-                amrex::Array4<amrex::Real const> detJ =
-                    mesh_mapping ? ((*mesh_detJ)(lev).const_array(mfi))
-                                 : amrex::Array4<amrex::Real const>();
-                const auto& ref_rho = is_anelastic
-                                          ? (*ref_density)(lev).const_array(mfi)
-                                          : amrex::Array4<amrex::Real>();
-
-                amrex::ParallelFor(
-                    bx, ncomp,
-                    [=] AMREX_GPU_DEVICE(int i, int j, int k, int n) noexcept {
-                        amrex::Real fac_cc =
-                            mesh_mapping ? (fac(i, j, k, n)) : 1.0;
-                        amrex::Real det_j =
-                            mesh_mapping ? (detJ(i, j, k)) : 1.0;
-                        sig(i, j, k, n) = std::pow(fac_cc, -2.) * det_j *
-                                          scaling_factor / rho(i, j, k);
-                        if (is_anelastic) {
-                            sig(i, j, k, n) *= ref_rho(i, j, k);
-                        }
-                    });
-            }
-        }
-    }
-
-    // Set up projection object
-    std::unique_ptr<Hydro::NodalProjector> nodal_projector;
-
-    auto bclo = get_projection_bc(Orientation::low);
-    auto bchi = get_projection_bc(Orientation::high);
-
-    // Velocity multifab is needed for proper initialization, but only the size
-    // matters for the purpose of calculating gradp, the values do not matter
-    Vector<MultiFab*> vel;
-    for (int lev = 0; lev <= finest_level; ++lev) {
-        vel.push_back(&(velocity(lev)));
-    }
-
-    if (is_anelastic) {
-        for (int lev = 0; lev <= finest_level; ++lev) {
-            amrex::Multiply(
-                velocity(lev), (*ref_density)(lev), 0, 0, density[lev]->nComp(),
-                0);
-        }
-    }
-
-    amr_wind::MLMGOptions options("nodal_proj");
-
-    if (variable_density || mesh_mapping) {
-        nodal_projector = std::make_unique<Hydro::NodalProjector>(
-            vel, GetVecOfConstPtrs(sigma), Geom(0, finest_level),
-            options.lpinfo());
-    } else {
-        amrex::Real rho_0 = 1.0;
-        amrex::ParmParse pp("incflo");
-        pp.query("density", rho_0);
-
-        nodal_projector = std::make_unique<Hydro::NodalProjector>(
-            vel, scaling_factor / rho_0, Geom(0, finest_level),
-            options.lpinfo());
-    }
-
-    // Set MLMG and NodalProjector options
-    options(*nodal_projector);
-    nodal_projector->setDomainBC(bclo, bchi);
-
-    // Recalculate gradphi with fluxes
-    auto gradphi = nodal_projector->calcGradPhi(pressure.vec_ptrs());
-
-    // Transfer pressure gradient to gp field
-    for (int lev = 0; lev <= finest_level; lev++) {
-
-#ifdef AMREX_USE_OMP
-#pragma omp parallel if (Gpu::notInLaunchRegion())
-#endif
-        for (MFIter mfi(grad_p(lev), TilingIfNotGPU()); mfi.isValid(); ++mfi) {
-            Box const& tbx = mfi.tilebox();
-            Array4<Real> const& gp_lev = grad_p(lev).array(mfi);
-            Array4<Real const> const& gp_proj = gradphi[lev]->const_array(mfi);
-            amrex::ParallelFor(
-                tbx, AMREX_SPACEDIM,
-                [=] AMREX_GPU_DEVICE(int i, int j, int k, int n) noexcept {
-                    gp_lev(i, j, k, n) = gp_proj(i, j, k, n);
-                });
-        }
-    }
-
-    // Average down is unnecessary because it is built into calcGradPhi
 }

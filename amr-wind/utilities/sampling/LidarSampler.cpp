@@ -60,7 +60,7 @@ void LidarSampler::initialize(const std::string& key)
     check_bounds();
 }
 
-void LidarSampler::update_sampling_locations()
+bool LidarSampler::update_sampling_locations()
 {
 
     amrex::Real time = m_sim.time().current_time();
@@ -84,6 +84,8 @@ void LidarSampler::update_sampling_locations()
     m_end[1] = m_start[1] + m_length * std::sin(current_azimuth) *
                                 std::sin(current_elevation);
     m_end[2] = m_start[2] + m_length * std::cos(current_elevation);
+
+    return true;
 }
 
 #ifdef AMR_WIND_USE_NETCDF
@@ -98,7 +100,9 @@ void LidarSampler::define_netcdf_metadata(const ncutils::NCGroup& grp) const
     grp.def_var("points", NC_DOUBLE, {"num_time_steps", "num_points", "ndim"});
 }
 
-void LidarSampler::populate_netcdf_metadata(const ncutils::NCGroup&) const {}
+void LidarSampler::populate_netcdf_metadata(
+    const ncutils::NCGroup& /*unused*/) const
+{}
 void LidarSampler::output_netcdf_data(
     const ncutils::NCGroup& grp, const size_t nt) const
 {
@@ -109,7 +113,7 @@ void LidarSampler::output_netcdf_data(
     sampling_locations(locs);
     auto xyz = grp.var("points");
     count[1] = num_points();
-    xyz.put(&locs[0][0], start, count);
+    xyz.put(locs[0].data(), start, count);
 }
 #else
 void LidarSampler::define_netcdf_metadata(

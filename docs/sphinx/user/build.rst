@@ -114,6 +114,23 @@ Other AMR-Wind specific options
 
    Enable checking test results against gold files using :program:`fcompare`. Default: OFF
 
+.. cmakeval:: AMR_WIND_REFERENCE_GOLDS_DIRECTORY
+
+   Directory for reference gold files when using :program:`fcompare`. Default: ""
+
+.. cmakeval:: AMR_WIND_SAVE_GOLDS
+
+   Enable saving of the gold files. Default: OFF
+
+.. cmakeval:: AMR_WIND_SAVED_GOLDS_DIRECTORY
+
+   Directory for saving gold files when using :program:`fcompare`. Default: ""
+
+.. cmakeval:: AMR_WIND_TEST_WITH_PYTHON
+
+   Enable performing tests that rely on python, primarily consists of checks 
+   for post-processing scripts in tools directory. Default: OFF
+
 .. cmakeval:: AMR_WIND_ENABLE_ALL_WARNINGS
 
    Enable compiler warnings during build. Default: OFF

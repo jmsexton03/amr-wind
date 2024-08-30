@@ -22,6 +22,7 @@ option(AMR_WIND_ENABLE_TESTS "Enable testing suite" OFF)
 option(AMR_WIND_TEST_WITH_FCOMPARE "Check test plots against gold files" OFF)
 option(AMR_WIND_SAVE_GOLDS "Provide a directory in which to save golds during testing" OFF)
 option(AMR_WIND_ENABLE_FPE_TRAP_FOR_TESTS "Enable FPE trapping in tests" ON)
+option(AMR_WIND_TEST_WITH_PYTHON "Enable testing relying on python, like postprocessing" OFF)
 
 #Options for the executable
 option(AMR_WIND_ENABLE_MPI "Enable MPI" OFF)
@@ -35,6 +36,7 @@ set(AMR_WIND_PRECISION "DOUBLE" CACHE STRING "Floating point precision SINGLE or
 # Third party libraries
 option(AMR_WIND_USE_INTERNAL_AMREX "Add AMReX as subproject" ON)
 option(AMR_WIND_USE_INTERNAL_AMREX_HYDRO "Add AMReX-Hydro as subproject" ON)
+option(AMR_WIND_USE_INTERNAL_WAVES2AMR "Add Waves2AMR as subproject" ON)
 option(AMR_WIND_ENABLE_HDF5 "Enable HDF5 library" OFF)
 option(AMR_WIND_ENABLE_HDF5_ZFP "Enable ZFP compression in HDF5 library" OFF)
 option(AMR_WIND_ENABLE_NETCDF "Enable NetCDF library" OFF)
@@ -44,6 +46,7 @@ option(AMR_WIND_ENABLE_HYPRE "Enable HYPRE integration" OFF)
 option(AMR_WIND_ENABLE_OPENFAST "Enable OpenFAST integration" OFF)
 option(AMR_WIND_ENABLE_ASCENT "Enable Ascent visualization library" OFF)
 option(AMR_WIND_ENABLE_UMPIRE "Enable Umpire GPU memory pools" OFF)
+option(AMR_WIND_ENABLE_W2A "Enable Waves2AMR library" OFF)
 
 #Options for C++
 set(CMAKE_CXX_STANDARD 17)
@@ -55,10 +58,6 @@ if(AMR_WIND_ENABLE_CUDA)
   if(CMAKE_CUDA_COMPILER_VERSION VERSION_LESS "10.0")
     message(FATAL_ERROR "Your nvcc version is ${CMAKE_CUDA_COMPILER_VERSION} which is unsupported."
       "Please use CUDA toolkit version 10.0 or newer.")
-  endif()
-  # Fix issues with GPU builds
-  if(AMR_WIND_ENABLE_OPENFAST)
-    enable_language(Fortran)
   endif()
 endif()
 
@@ -85,15 +84,21 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
   message(WARNING "Disabling FPE trapping for tests when using AppleClang.")
 endif()
 
+if(AMR_WIND_ENABLE_OPENFAST)
+  enable_language(Fortran)
+endif()
+
 ########################### AMReX #####################################
 init_amrex()
 init_amrex_hydro()
 
-########################### AMR-Wind #####################################
-
-if(AMR_WIND_ENABLE_MPI)
-  find_package(MPI REQUIRED)
+########################## Waves2AMR ##################################
+if (AMR_WIND_ENABLE_W2A)
+  # submodule for the code, not always compiled
+  init_waves2amr()
 endif()
+
+########################### AMR-Wind #####################################
 
 # General information about machine, compiler, and build type
 message(STATUS "AMR-Wind Information:")
@@ -122,6 +127,13 @@ if(CLANG_TIDY_EXE)
 endif()
 
 include(set_compile_flags)
+if (AMR_WIND_ENABLE_W2A)
+  # Turn on the use of the library via bool, it has already been included above
+  target_compile_definitions(${amr_wind_lib_name} PUBLIC AMR_WIND_USE_W2A)
+  # Address FFTW dependencies
+  set(CMAKE_PREFIX_PATH ${FFTW_DIR} ${CMAKE_PREFIX_PATH})
+  include_directories(${FFTW_DIR}/include)
+endif()
 
 if(ERF_ENABLE_MULTIBLOCK)
     target_compile_definitions(${amr_wind_lib_name} PUBLIC ERF_USE_MULTIBLOCK)
@@ -159,10 +171,6 @@ if(AMR_WIND_ENABLE_OPENFAST)
   find_package(OpenFAST REQUIRED)
   include(CheckIncludeFileCXX)
   set(CMAKE_REQUIRED_INCLUDES "${OpenFAST_INCLUDE_DIRS}")
-  check_include_file_cxx("SCDataEx_Types.h" USE_SCDX)
-  if(USE_SCDX)
-    target_compile_definitions(${amr_wind_lib_name} PUBLIC AMR_WIND_FAST_USE_SCDX)
-  endif()
   target_compile_definitions(${amr_wind_lib_name} PUBLIC AMR_WIND_USE_OPENFAST)
   target_include_directories(${amr_wind_lib_name} PUBLIC ${OpenFAST_INCLUDE_DIRS})
   target_link_libraries(${amr_wind_lib_name} PUBLIC ${OpenFAST_LIBRARIES})

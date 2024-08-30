@@ -3,6 +3,7 @@
 #include "amr-wind/equation_systems/icns/icns_advection.H"
 #include "amr-wind/core/MLMGOptions.H"
 #include "amr-wind/utilities/console_io.H"
+#include "amr-wind/wind_energy/ABL.H"
 
 #include "AMReX_MultiFabUtil.H"
 #include "hydro_MacProjector.H"
@@ -42,11 +43,13 @@ amrex::Array<amrex::LinOpBCType, AMREX_SPACEDIM> get_projection_bc(
 
 MacProjOp::MacProjOp(
     FieldRepo& repo,
+    PhysicsMgr& phy_mgr,
     bool has_overset,
     bool variable_density,
     bool mesh_mapping,
     bool is_anelastic)
     : m_repo(repo)
+    , m_phy_mgr(phy_mgr)
     , m_options("mac_proj")
     , m_has_overset(has_overset)
     , m_variable_density(variable_density)
@@ -55,6 +58,21 @@ MacProjOp::MacProjOp(
 {
     amrex::ParmParse pp("incflo");
     pp.query("density", m_rho_0);
+    amrex::ParmParse pp_ovst("Overset");
+    bool disable_ovst_mac = false;
+    pp_ovst.query("disable_coupled_mac_proj", disable_ovst_mac);
+    m_has_overset = m_has_overset && !disable_ovst_mac;
+}
+
+void MacProjOp::enforce_inout_solvability(
+    const amrex::Vector<amrex::Array<amrex::MultiFab*, AMREX_SPACEDIM>>&
+        a_umac) noexcept
+{
+    auto& velocity = m_repo.get_field("velocity");
+    amrex::BCRec const* bc_type = velocity.bcrec_device().data();
+    const amrex::Vector<amrex::Geometry>& geom = m_repo.mesh().Geom();
+
+    HydroUtils::enforceInOutSolvability(a_umac, bc_type, geom);
 }
 
 void MacProjOp::init_projector(const MacProjOp::FaceFabPtrVec& beta) noexcept
@@ -103,6 +121,32 @@ void MacProjOp::init_projector(const amrex::Real beta) noexcept
             amrex::Orientation::high, bctype, m_repo.mesh().Geom()));
 
     m_need_init = false;
+}
+
+void MacProjOp::set_inflow_velocity(amrex::Real time)
+{
+    // Currently, input boundary planes account for inflow differently
+    // Also, MPL needs to be refactored to do this properly, defer for now
+    if (m_phy_mgr.contains("ABL")) {
+        if (m_phy_mgr.get<amr_wind::ABL>().bndry_plane().mode() ==
+            io_mode::input) {
+            return;
+        }
+        if (m_phy_mgr.get<amr_wind::ABL>().abl_mpl().is_active()) {
+            return;
+        }
+    }
+
+    auto& velocity = m_repo.get_field("velocity");
+    auto& u_mac = m_repo.get_field("u_mac");
+    auto& v_mac = m_repo.get_field("v_mac");
+    auto& w_mac = m_repo.get_field("w_mac");
+
+    for (int lev = 0; lev < m_repo.num_active_levels(); ++lev) {
+        amrex::Array<amrex::MultiFab*, AMREX_SPACEDIM> mac_vec = {
+            AMREX_D_DECL(&u_mac(lev), &v_mac(lev), &w_mac(lev))};
+        velocity.set_inflow_sibling_fields(lev, time, mac_vec);
+    }
 }
 
 //
@@ -233,6 +277,12 @@ void MacProjOp::operator()(const FieldState fstate, const amrex::Real dt)
         }
     }
 
+    const bool has_inout_bndry =
+        (m_repo.get_field("velocity")).has_inout_bndry();
+    if (has_inout_bndry) {
+        enforce_inout_solvability(mac_vec);
+    }
+
     m_mac_proj->setUMAC(mac_vec);
 
     if (m_has_overset) {
@@ -278,11 +328,11 @@ void MacProjOp::mac_proj_to_uniform_space(
     const auto& mesh_fac_zf =
         repo.get_mesh_mapping_field(amr_wind::FieldLoc::ZFACE);
     const auto& mesh_detJ_xf =
-        repo.get_mesh_mapping_detJ(amr_wind::FieldLoc::XFACE);
+        repo.get_mesh_mapping_det_j(amr_wind::FieldLoc::XFACE);
     const auto& mesh_detJ_yf =
-        repo.get_mesh_mapping_detJ(amr_wind::FieldLoc::YFACE);
+        repo.get_mesh_mapping_det_j(amr_wind::FieldLoc::YFACE);
     const auto& mesh_detJ_zf =
-        repo.get_mesh_mapping_detJ(amr_wind::FieldLoc::ZFACE);
+        repo.get_mesh_mapping_det_j(amr_wind::FieldLoc::ZFACE);
 
     // scale U^mac to accommodate for mesh mapping -> U^bar = J/fac *
     // U^mac beta accounted for mesh mapping = J/fac^2 * 1/rho construct

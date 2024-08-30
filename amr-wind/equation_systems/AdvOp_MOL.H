@@ -20,10 +20,11 @@ template <typename PDE>
 struct AdvectionOp<
     PDE,
     fvm::MOL,
-    typename std::enable_if<std::is_base_of<ScalarTransport, PDE>::value>::type>
+    typename std::enable_if_t<std::is_base_of_v<ScalarTransport, PDE>>>
 {
     // cppcheck-suppress uninitMemberVar
     AdvectionOp(
+        CFDSim& /* sim */,
         PDEFields& fields_in,
         bool /* has_overset */,
         bool /* variable density */,

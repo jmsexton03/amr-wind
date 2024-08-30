@@ -16,27 +16,27 @@ namespace amr_wind::multiphase {
  *  to zero.
  */
 
-AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE void youngs_fd_normal(
-    int i,
-    int j,
-    int k,
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE void youngs_finite_difference_normal(
+    const int i,
+    const int j,
+    const int k,
     amrex::Array4<amrex::Real const> const& volfrac,
     amrex::Real& mx,
     amrex::Real& my,
     amrex::Real& mz) noexcept
 {
-    amrex::Real mm1, mm2;
-
-    mm1 = volfrac(i - 1, j - 1, k - 1) + volfrac(i - 1, j - 1, k + 1) +
-          volfrac(i - 1, j + 1, k - 1) + volfrac(i - 1, j + 1, k + 1) +
-          2.0 * (volfrac(i - 1, j - 1, k) + volfrac(i - 1, j + 1, k) +
-                 volfrac(i - 1, j, k - 1) + volfrac(i - 1, j, k + 1)) +
-          4.0 * volfrac(i - 1, j, k);
-    mm2 = volfrac(i + 1, j - 1, k - 1) + volfrac(i + 1, j - 1, k + 1) +
-          volfrac(i + 1, j + 1, k - 1) + volfrac(i + 1, j + 1, k + 1) +
-          2.0 * (volfrac(i + 1, j - 1, k) + volfrac(i + 1, j + 1, k) +
-                 volfrac(i + 1, j, k - 1) + volfrac(i + 1, j, k + 1)) +
-          4.0 * volfrac(i + 1, j, k);
+    amrex::Real mm1 =
+        volfrac(i - 1, j - 1, k - 1) + volfrac(i - 1, j - 1, k + 1) +
+        volfrac(i - 1, j + 1, k - 1) + volfrac(i - 1, j + 1, k + 1) +
+        2.0 * (volfrac(i - 1, j - 1, k) + volfrac(i - 1, j + 1, k) +
+               volfrac(i - 1, j, k - 1) + volfrac(i - 1, j, k + 1)) +
+        4.0 * volfrac(i - 1, j, k);
+    amrex::Real mm2 =
+        volfrac(i + 1, j - 1, k - 1) + volfrac(i + 1, j - 1, k + 1) +
+        volfrac(i + 1, j + 1, k - 1) + volfrac(i + 1, j + 1, k + 1) +
+        2.0 * (volfrac(i + 1, j - 1, k) + volfrac(i + 1, j + 1, k) +
+               volfrac(i + 1, j, k - 1) + volfrac(i + 1, j, k + 1)) +
+        4.0 * volfrac(i + 1, j, k);
     mx = mm1 - mm2;
 
     mm1 = volfrac(i - 1, j - 1, k - 1) + volfrac(i - 1, j - 1, k + 1) +
@@ -64,39 +64,96 @@ AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE void youngs_fd_normal(
     mz = mm1 - mm2;
 }
 
-AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE void mixed_youngs_central_normal(
-    int i,
-    int j,
-    int k,
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE void
+youngs_finite_difference_normal_neumann(
+    const int i,
+    const int j,
+    const int k,
+    const int ibdy,
+    const int jbdy,
+    const int kbdy,
     amrex::Array4<amrex::Real const> const& volfrac,
     amrex::Real& mx,
     amrex::Real& my,
     amrex::Real& mz) noexcept
 {
-    amrex::Real m[AMREX_SPACEDIM + 1][AMREX_SPACEDIM];
-    amrex::Real m1, m2;
+    // Do neumann condition via indices
+    const int im1 = ibdy == -1 ? i : i - 1;
+    const int jm1 = jbdy == -1 ? j : j - 1;
+    const int km1 = kbdy == -1 ? k : k - 1;
+    const int ip1 = ibdy == +1 ? i : i + 1;
+    const int jp1 = jbdy == +1 ? j : j + 1;
+    const int kp1 = kbdy == +1 ? k : k + 1;
+
+    amrex::Real mm1 = volfrac(im1, jm1, km1) + volfrac(im1, jm1, kp1) +
+                      volfrac(im1, jp1, km1) + volfrac(im1, jp1, kp1) +
+                      2.0 * (volfrac(im1, jm1, k) + volfrac(im1, jp1, k) +
+                             volfrac(im1, j, km1) + volfrac(im1, j, kp1)) +
+                      4.0 * volfrac(im1, j, k);
+    amrex::Real mm2 = volfrac(ip1, jm1, km1) + volfrac(ip1, jm1, kp1) +
+                      volfrac(ip1, jp1, km1) + volfrac(ip1, jp1, kp1) +
+                      2.0 * (volfrac(ip1, jm1, k) + volfrac(ip1, jp1, k) +
+                             volfrac(ip1, j, km1) + volfrac(ip1, j, kp1)) +
+                      4.0 * volfrac(ip1, j, k);
+    mx = mm1 - mm2;
+
+    mm1 = volfrac(im1, jm1, km1) + volfrac(im1, jm1, kp1) +
+          volfrac(ip1, jm1, km1) + volfrac(ip1, jm1, kp1) +
+          2.0 * (volfrac(im1, jm1, k) + volfrac(ip1, jm1, k) +
+                 volfrac(i, jm1, km1) + volfrac(i, jm1, kp1)) +
+          4.0 * volfrac(i, jm1, k);
+    mm2 = volfrac(im1, jp1, km1) + volfrac(im1, jp1, kp1) +
+          volfrac(ip1, jp1, km1) + volfrac(ip1, jp1, kp1) +
+          2.0 * (volfrac(im1, jp1, k) + volfrac(ip1, jp1, k) +
+                 volfrac(i, jp1, km1) + volfrac(i, jp1, kp1)) +
+          4.0 * volfrac(i, jp1, k);
+    my = mm1 - mm2;
+
+    mm1 = volfrac(im1, jm1, km1) + volfrac(im1, jp1, km1) +
+          volfrac(ip1, jm1, km1) + volfrac(ip1, jp1, km1) +
+          2.0 * (volfrac(im1, j, km1) + volfrac(ip1, j, km1) +
+                 volfrac(i, jm1, km1) + volfrac(i, jp1, km1)) +
+          4.0 * volfrac(i, j, km1);
+    mm2 = volfrac(im1, jm1, kp1) + volfrac(im1, jp1, kp1) +
+          volfrac(ip1, jm1, kp1) + volfrac(ip1, jp1, kp1) +
+          2.0 * (volfrac(im1, j, kp1) + volfrac(ip1, j, kp1) +
+                 volfrac(i, jm1, kp1) + volfrac(i, jp1, kp1)) +
+          4.0 * volfrac(i, j, kp1);
+    mz = mm1 - mm2;
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE void mixed_youngs_central_normal(
+    const int i,
+    const int j,
+    const int k,
+    amrex::Array4<amrex::Real const> const& volfrac,
+    amrex::Real& mx,
+    amrex::Real& my,
+    amrex::Real& mz) noexcept
+{
+    amrex::Array2D<amrex::Real, 0, AMREX_SPACEDIM + 1, 0, AMREX_SPACEDIM> m;
     // write the plane as: sgn(mx) X =  my Y +  mz Z + alpha
     //                           m00 X = m01 Y + m02 Z + alpha
-    m1 = volfrac(i - 1, j, k - 1) + volfrac(i - 1, j, k + 1) +
-         volfrac(i - 1, j - 1, k) + volfrac(i - 1, j + 1, k) +
-         volfrac(i - 1, j, k);
-    m2 = volfrac(i + 1, j, k - 1) + volfrac(i + 1, j, k + 1) +
-         volfrac(i + 1, j - 1, k) + volfrac(i + 1, j + 1, k) +
-         volfrac(i + 1, j, k);
+    amrex::Real m1 = volfrac(i - 1, j, k - 1) + volfrac(i - 1, j, k + 1) +
+                     volfrac(i - 1, j - 1, k) + volfrac(i - 1, j + 1, k) +
+                     volfrac(i - 1, j, k);
+    amrex::Real m2 = volfrac(i + 1, j, k - 1) + volfrac(i + 1, j, k + 1) +
+                     volfrac(i + 1, j - 1, k) + volfrac(i + 1, j + 1, k) +
+                     volfrac(i + 1, j, k);
 
-    m[0][0] = (m1 > m2) ? 1.0 : -1.0;
+    m(0, 0) = (m1 > m2) ? 1.0 : -1.0;
 
     m1 = volfrac(i - 1, j - 1, k) + volfrac(i + 1, j - 1, k) +
          volfrac(i, j - 1, k);
     m2 = volfrac(i - 1, j + 1, k) + volfrac(i + 1, j + 1, k) +
          volfrac(i, j + 1, k);
-    m[0][1] = 0.5 * (m1 - m2);
+    m(0, 1) = 0.5 * (m1 - m2);
 
     m1 = volfrac(i - 1, j, k - 1) + volfrac(i + 1, j, k - 1) +
          volfrac(i, j, k - 1);
     m2 = volfrac(i - 1, j, k + 1) + volfrac(i + 1, j, k + 1) +
          volfrac(i, j, k + 1);
-    m[0][2] = 0.5 * (m1 - m2);
+    m(0, 2) = 0.5 * (m1 - m2);
 
     // write the plane as: sgn(my) Y =  mx X +  mz Z + alpha,
     //                          m11 Y = m10 X + m12 Z + alpha.
@@ -105,7 +162,7 @@ AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE void mixed_youngs_central_normal(
          volfrac(i - 1, j, k);
     m2 = volfrac(i + 1, j - 1, k) + volfrac(i + 1, j + 1, k) +
          volfrac(i + 1, j, k);
-    m[1][0] = 0.5 * (m1 - m2);
+    m(1, 0) = 0.5 * (m1 - m2);
 
     m1 = volfrac(i, j - 1, k - 1) + volfrac(i, j - 1, k + 1) +
          volfrac(i + 1, j - 1, k) + volfrac(i - 1, j - 1, k) +
@@ -114,13 +171,13 @@ AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE void mixed_youngs_central_normal(
          volfrac(i + 1, j + 1, k) + volfrac(i - 1, j + 1, k) +
          volfrac(i, j + 1, k);
 
-    m[1][1] = (m1 > m2) ? 1.0 : -1.0;
+    m(1, 1) = (m1 > m2) ? 1.0 : -1.0;
 
     m1 = volfrac(i, j - 1, k - 1) + volfrac(i, j, k - 1) +
          volfrac(i, j + 1, k - 1);
     m2 = volfrac(i, j - 1, k + 1) + volfrac(i, j, k + 1) +
          volfrac(i, j + 1, k + 1);
-    m[1][2] = 0.5 * (m1 - m2);
+    m(1, 2) = 0.5 * (m1 - m2);
 
     // write the plane as: sgn(mz) Z =  mx X +  my Y + alpha
     //                          m22 Z = m20 X + m21 Y + alpha
@@ -129,13 +186,13 @@ AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE void mixed_youngs_central_normal(
          volfrac(i - 1, j, k);
     m2 = volfrac(i + 1, j, k - 1) + volfrac(i + 1, j, k + 1) +
          volfrac(i + 1, j, k);
-    m[2][0] = 0.5 * (m1 - m2);
+    m(2, 0) = 0.5 * (m1 - m2);
 
     m1 = volfrac(i, j - 1, k - 1) + volfrac(i, j - 1, k + 1) +
          volfrac(i, j - 1, k);
     m2 = volfrac(i, j + 1, k - 1) + volfrac(i, j + 1, k + 1) +
          volfrac(i, j + 1, k);
-    m[2][1] = 0.5 * (m1 - m2);
+    m(2, 1) = 0.5 * (m1 - m2);
 
     m1 = volfrac(i - 1, j, k - 1) + volfrac(i + 1, j, k - 1) +
          volfrac(i, j - 1, k - 1) + volfrac(i, j + 1, k - 1) +
@@ -144,30 +201,30 @@ AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE void mixed_youngs_central_normal(
          volfrac(i, j - 1, k + 1) + volfrac(i, j + 1, k + 1) +
          volfrac(i, j, k + 1);
 
-    m[2][2] = (m1 > m2) ? 1.0 : -1.0;
+    m(2, 2) = (m1 > m2) ? 1.0 : -1.0;
 
     // normalize each set (mx,my,mz): |mx|+|my|+|mz| = 1
     amrex::Real t0, t1, t2;
 
-    t0 = std::abs(m[0][0]) + std::abs(m[0][1]) + std::abs(m[0][2]);
-    m[0][0] = m[0][0] / t0;
-    m[0][1] = m[0][1] / t0;
-    m[0][2] = m[0][2] / t0;
+    t0 = std::abs(m(0, 0)) + std::abs(m(0, 1)) + std::abs(m(0, 2));
+    m(0, 0) = m(0, 0) / t0;
+    m(0, 1) = m(0, 1) / t0;
+    m(0, 2) = m(0, 2) / t0;
 
-    t0 = std::abs(m[1][0]) + std::abs(m[1][1]) + std::abs(m[1][2]);
-    m[1][0] = m[1][0] / t0;
-    m[1][1] = m[1][1] / t0;
-    m[1][2] = m[1][2] / t0;
+    t0 = std::abs(m(1, 0)) + std::abs(m(1, 1)) + std::abs(m(1, 2));
+    m(1, 0) = m(1, 0) / t0;
+    m(1, 1) = m(1, 1) / t0;
+    m(1, 2) = m(1, 2) / t0;
 
-    t0 = std::abs(m[2][0]) + std::abs(m[2][1]) + std::abs(m[2][2]);
-    m[2][0] = m[2][0] / t0;
-    m[2][1] = m[2][1] / t0;
-    m[2][2] = m[2][2] / t0;
+    t0 = std::abs(m(2, 0)) + std::abs(m(2, 1)) + std::abs(m(2, 2));
+    m(2, 0) = m(2, 0) / t0;
+    m(2, 1) = m(2, 1) / t0;
+    m(2, 2) = m(2, 2) / t0;
 
     // choose among the three central schemes */
-    t0 = std::abs(m[0][0]);
-    t1 = std::abs(m[1][1]);
-    t2 = std::abs(m[2][2]);
+    t0 = std::abs(m(0, 0));
+    t1 = std::abs(m(1, 1));
+    t2 = std::abs(m(2, 2));
 
     int cn = 0;
     if (t1 > t0) {
@@ -180,18 +237,19 @@ AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE void mixed_youngs_central_normal(
     }
 
     // Youngs-CIAM scheme */
-    youngs_fd_normal(i, j, k, volfrac, m[3][0], m[3][1], m[3][2]);
+    youngs_finite_difference_normal(
+        i, j, k, volfrac, m(3, 0), m(3, 1), m(3, 2));
     // normalize the set (mx,my,mz): |mx|+|my|+|mz| = 1
     constexpr amrex::Real tiny = 1e-20;
-    t0 = std::abs(m[3][0]) + std::abs(m[3][1]) + std::abs(m[3][2]) + tiny;
-    m[3][0] = m[3][0] / t0;
-    m[3][1] = m[3][1] / t0;
-    m[3][2] = m[3][2] / t0;
+    t0 = std::abs(m(3, 0)) + std::abs(m(3, 1)) + std::abs(m(3, 2)) + tiny;
+    m(3, 0) = m(3, 0) / t0;
+    m(3, 1) = m(3, 1) / t0;
+    m(3, 2) = m(3, 2) / t0;
 
     // choose between the previous choice and Youngs-CIAM
-    t0 = std::abs(m[3][0]);
-    t1 = std::abs(m[3][1]);
-    t2 = std::abs(m[3][2]);
+    t0 = std::abs(m(3, 0));
+    t1 = std::abs(m(3, 1));
+    t2 = std::abs(m(3, 2));
     if (t1 > t0) {
         t0 = t1;
     }
@@ -199,22 +257,25 @@ AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE void mixed_youngs_central_normal(
         t0 = t2;
     }
 
-    if (std::abs(m[cn][cn]) > t0 && t0 > 0.0) {
+    if (std::abs(m(cn, cn)) > t0 && t0 > 0.0) {
         // second t0 condition is to ensure nonzero normal magnitude
         cn = 3;
     }
 
     // components of the normal vector */
-    mx = m[cn][0];
-    my = m[cn][1];
-    mz = m[cn][2];
+    mx = m(cn, 0);
+    my = m(cn, 1);
+    mz = m(cn, 2);
 }
 
 /* Computes alpha: m1*x1 + m2* x2 + m3*x3 = alpha
  * given that m1+m2+m3=1 (m1,m2,m3>0) and the volumetric fraction volF
  */
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE amrex::Real volume_intercept(
-    amrex::Real b1, amrex::Real b2, amrex::Real b3, amrex::Real volF) noexcept
+    const amrex::Real b1,
+    const amrex::Real b2,
+    const amrex::Real b3,
+    const amrex::Real volF) noexcept
 {
     using namespace amrex;
 
@@ -296,15 +357,15 @@ AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE amrex::Real volume_intercept(
  * (5) calculate volume (NOTE: it is assumed:s0=t0=0; ds0=dt0=1.)
  */
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE amrex::Real cut_volume(
-    amrex::Real m1,
-    amrex::Real m2,
-    amrex::Real m3,
-    amrex::Real alpha,
-    amrex::Real r0,
-    amrex::Real dr0) noexcept
+    const amrex::Real m1,
+    const amrex::Real m2,
+    const amrex::Real m3,
+    const amrex::Real alpha,
+    const amrex::Real r0,
+    const amrex::Real dr0) noexcept
 {
 
-    amrex::Real const_tiny = std::numeric_limits<amrex::Real>::epsilon();
+    const amrex::Real const_tiny = std::numeric_limits<amrex::Real>::epsilon();
     amrex::Real al;
 
     // move origin to x0
@@ -428,11 +489,11 @@ AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE void fit_plane(
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE bool interface_band(
-    int i,
-    int j,
-    int k,
+    const int i,
+    const int j,
+    const int k,
     amrex::Array4<amrex::Real const> const& volfrac,
-    int n_band = 1) noexcept
+    const int n_band = 1) noexcept
 {
     // n_band must be <= number of vof ghost cells (3)
     constexpr amrex::Real tiny = 1e-12;
@@ -456,14 +517,14 @@ AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE bool interface_band(
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE amrex::Real levelset_to_vof(
-    int i,
-    int j,
-    int k,
-    amrex::Real eps,
+    const int i,
+    const int j,
+    const int k,
+    const amrex::Real eps,
     amrex::Array4<amrex::Real const> const& phi) noexcept
 {
     amrex::Real mx, my, mz;
-    youngs_fd_normal(i, j, k, phi, mx, my, mz);
+    youngs_finite_difference_normal(i, j, k, phi, mx, my, mz);
     mx = std::abs(mx / 32.);
     my = std::abs(my / 32.);
     mz = std::abs(mz / 32.);

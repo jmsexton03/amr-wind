@@ -53,8 +53,8 @@ protected:
         amr_wind::actuator::ActuatorContainer::ParticleType::NextID(1U);
     }
 
-    static void
-    add_actuators(const std::string& type, amrex::Vector<std::string> labels)
+    static void add_actuators(
+        const std::string& type, const amrex::Vector<std::string>& labels)
     {
         amrex::ParmParse pp("Actuator");
         pp.add("type", type);
@@ -168,7 +168,7 @@ struct ProcessOutputsOp<::amr_wind_tests::Joukowsky, ActSrcDisk>
     void operator()(::amr_wind_tests::Joukowsky::DataType& /*data*/) {}
     void read_io_options(const utils::ActParser& /**/) {}
     void prepare_outputs(const std::string& /**/) {}
-    void write_outputs(){};
+    void write_outputs() {};
 };
 
 } // namespace ops

@@ -48,13 +48,13 @@ void MOData::update_fluxes(int max_iters)
     do {
         utau_iter = utau;
         switch (alg_type) {
-        case HEAT_FLUX:
+        case ThetaCalcType::HEAT_FLUX:
             surf_temp = surf_temp_flux * (std::log(zref / z0) - psi_h) /
                             (utau * kappa) +
                         theta_mean;
             break;
 
-        case SURFACE_TEMPERATURE:
+        case ThetaCalcType::SURFACE_TEMPERATURE:
             surf_temp_flux = -(theta_mean - surf_temp) * utau * kappa /
                              (std::log(zref / z0) - psi_h);
             break;
@@ -79,11 +79,11 @@ void MOData::update_fluxes(int max_iters)
     if (iter >= max_iters) {
         amrex::Print()
             << "MOData::update_fluxes: Convergence criteria not met after "
-            << max_iters << " iterations"
-            << "\nObuhov length = " << obukhov_len << " zeta = " << zeta
-            << "\npsi_m = " << psi_m << " psi_h = " << psi_h
-            << "\nutau = " << utau << " Tsurf = " << surf_temp
-            << " q = " << surf_temp_flux << std::endl;
+            << max_iters << " iterations\nObuhov length = " << obukhov_len
+            << " zeta = " << zeta << "\npsi_m = " << psi_m
+            << " psi_h = " << psi_h << "\nutau = " << utau
+            << " Tsurf = " << surf_temp << " q = " << surf_temp_flux
+            << std::endl;
     }
 }
 

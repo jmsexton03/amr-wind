@@ -1,8 +1,8 @@
 # AMR-Wind 
 
-[Website](https://www.exawind.org/) | [User manual](https://exawind.github.io/amr-wind) | [API docs](https://exawind.github.io/amr-wind/api_docs) | [Nightly test dashboard](http://my.cdash.org/index.php?project=Exawind) 
+[User manual](https://exawind.github.io/amr-wind) | [API docs](https://exawind.github.io/amr-wind/api_docs) | [Nightly test dashboard](http://my.cdash.org/index.php?project=Exawind) 
 
-[![Powered by AMReX](https://amrex-codes.github.io/badges/powered%20by-AMReX-red.svg)](https://amrex-codes.github.io/amrex/) [![Build Status](https://github.com/Exawind/amr-wind/workflows/AMR-Wind-CI/badge.svg)](https://github.com/Exawind/amr-wind/actions)
+[![Powered by AMReX](https://amrex-codes.github.io/badges/powered%20by-AMReX-red.svg)](https://amrex-codes.github.io/amrex/) [![Build Status](https://github.com/Exawind/amr-wind/workflows/AMR-Wind-CI/badge.svg)](https://github.com/Exawind/amr-wind/actions) [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/9284/badge)](https://www.bestpractices.dev/projects/9284)
 
 
 AMR-Wind is a massively parallel, block-structured adaptive-mesh, incompressible
@@ -65,7 +65,18 @@ issue](https://github.com/Exawind/amr-wind/issues/new) on GitHub.
 
 We welcome contributions from the community in form of bug fixes, feature
 enhancements, documentation updates, etc. All contributions are processed
-through pull-requests on GitHub.
+through pull-requests on GitHub. Please refer to the 
+[coding guidelines](https://exawind.github.io/amr-wind/developer/coding_guidelines.html) as
+a reference for the best practices currently used to develop AMR-Wind.
+
+## Versioning and tags
+
+AMR-Wind uses a type of semantic versioning to help users navigate different versions of the code, 
+which are labeled with GitHub tags. These tagged versions are not exhaustive, and they adhere to
+the following convention. Given a version number MAJOR.MINOR.PATCH:
+1. MAJOR version for changes to input file compatibility for key aspects of the solver, when a key model is changed to significantly affect results of simulations, when a major new capability is added
+2. MINOR version for when a significant feature is added (in a backward compatible manner), accumulation of smaller features, or changes to input file compatibility for less central aspects of the solver (e.g., post-processing, forcing terms)
+3. PATCH version for backward compatible bug fixes
 
 ## License
 

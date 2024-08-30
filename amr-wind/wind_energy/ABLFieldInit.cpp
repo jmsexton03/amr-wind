@@ -42,7 +42,7 @@ void ABLFieldInit::initialize_from_inputfile()
     pp_abl.query("random_gauss_mean", m_theta_gauss_mean);
     pp_abl.query("random_gauss_var", m_theta_gauss_var);
     pp_abl.query("cutoff_height", m_theta_cutoff_height);
-    pp_abl.query("theta_amplitude", m_deltaT);
+    pp_abl.query("theta_amplitude", m_delta_t);
 
     pp_abl.query("init_tke", m_tke_init);
     pp_abl.query("init_tke_beare_profile", m_tke_init_profile);
@@ -69,12 +69,15 @@ void ABLFieldInit::initialize_from_inputfile()
     if (!m_vel_timetable.empty()) {
         std::ifstream ifh(m_vel_timetable, std::ios::in);
         if (!ifh.good()) {
-            amrex::Abort("Cannot find input file: " + m_vel_timetable);
+            amrex::Abort(
+                "Cannot find ABLForcing velocity_timetable file: " +
+                m_vel_timetable);
         }
-        amrex::Real m_vel_time;
-        amrex::Real m_vel_ang;
-        ifh >> m_vel_time >> m_vel_speed >> m_vel_ang;
-        m_vel_dir = utils::radians(m_vel_ang);
+        ifh.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+        amrex::Real vel_time;
+        amrex::Real vel_ang;
+        ifh >> vel_time >> m_vel_speed >> vel_ang;
+        m_vel_dir = utils::radians(vel_ang);
     } else {
         pp_incflo.getarr("velocity", m_vel);
     }
@@ -106,7 +109,7 @@ void ABLFieldInit::initialize_from_netcdf()
         profileFile, NC_NOWRITE | NC_NETCDF4 | NC_MPIIO,
         amrex::ParallelContext::CommunicatorSub(), MPI_INFO_NULL);
 
-    int num_prof_val = ncf.dim("nheight").len();
+    const auto num_prof_val = ncf.dim("nheight").len();
 
     m_theta_heights.resize(num_prof_val);
     m_theta_values.resize(num_prof_val);
@@ -291,7 +294,7 @@ void ABLFieldInit::perturb_temperature(
     const auto theta_cutoff_height = m_theta_cutoff_height;
     const auto theta_gauss_mean = m_theta_gauss_mean;
     const auto theta_gauss_var = m_theta_gauss_var;
-    const auto deltaT = m_deltaT;
+    const auto delta_t = m_delta_t;
 
 #ifdef AMREX_USE_OMP
 #pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
@@ -307,9 +310,9 @@ void ABLFieldInit::perturb_temperature(
                     const amrex::RandomEngine& engine) noexcept {
                 const amrex::Real z = problo[2] + (k + 0.5) * dx[2];
                 if (z < theta_cutoff_height) {
-                    theta(i, j, k) =
-                        deltaT * amrex::RandomNormal(
-                                     theta_gauss_mean, theta_gauss_var, engine);
+                    theta(i, j, k) = delta_t * amrex::RandomNormal(
+                                                   theta_gauss_mean,
+                                                   theta_gauss_var, engine);
                 }
             });
     }

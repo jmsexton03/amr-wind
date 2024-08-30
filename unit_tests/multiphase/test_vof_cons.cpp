@@ -29,19 +29,7 @@ void initialize_volume_fractions(
                     }
                 }
             } else {
-                int icheck = 0;
-                // Left half is liquid, right half is gas
-                switch (dir) {
-                case 0:
-                    icheck = i;
-                    break;
-                case 1:
-                    icheck = j;
-                    break;
-                case 2:
-                    icheck = k;
-                    break;
-                }
+                const int icheck = (dir == 0) ? i : ((dir == 1) ? j : k);
                 if (2 * icheck + 1 == nx) {
                     vof_arr(i, j, k) = 0.5;
                 } else {
@@ -79,36 +67,25 @@ void initialize_adv_velocities(
     });
 }
 
-void check_accuracy(int dir, int nx, amrex::Real tol, amr_wind::Field& vof)
+void get_accuracy(
+    amr_wind::ScratchField& err_fld, int dir, int nx, amr_wind::Field& vof)
 {
     run_algorithm(vof, [&](const int lev, const amrex::MFIter& mfi) {
+        auto err_arr = err_fld(lev).array(mfi);
         const auto& vof_arr = vof(lev).const_array(mfi);
         const auto& bx = mfi.validbox();
         amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE(int i, int j, int k) {
-            int icheck = 0;
-            switch (dir) {
-            case 0:
-                icheck = i;
-                break;
-            case 1:
-                icheck = j;
-                break;
-            case 2:
-                icheck = k;
-                break;
-            }
+            const int icheck = (dir == 0) ? i : ((dir == 1) ? j : k);
             // Check if current solution matches initial solution
-#ifndef AMREX_USE_GPU
             if (2 * icheck + 1 == nx) {
-                EXPECT_NEAR(vof_arr(i, j, k), 0.5, tol);
+                err_arr(i, j, k) = std::abs(vof_arr(i, j, k) - 0.5);
             } else {
                 if (2 * icheck + 1 < nx) {
-                    EXPECT_NEAR(vof_arr(i, j, k), 1.0, tol);
+                    err_arr(i, j, k) = std::abs(vof_arr(i, j, k) - 1.0);
                 } else {
-                    EXPECT_NEAR(vof_arr(i, j, k), 0.0, tol);
+                    err_arr(i, j, k) = std::abs(vof_arr(i, j, k) - 0.0);
                 }
             }
-#endif
         });
     });
 }
@@ -149,7 +126,7 @@ protected:
         }
         {
             amrex::ParmParse pp("time");
-            pp.add("fixed_dt", dt);
+            pp.add("fixed_dt", m_dt);
         }
         {
             amrex::ParmParse pp("VOF");
@@ -165,11 +142,11 @@ protected:
         const amrex::Real ft_time = 1.0 / m_vel;
 
         // Set timestep according to input
-        dt = ft_time / ((amrex::Real)m_nx) * CFL;
+        m_dt = ft_time / ((amrex::Real)m_nx) * CFL;
         // Round to nearest integer timesteps
-        int niter = (int)round(ft_time / dt);
+        int niter = (int)round(ft_time / m_dt);
         // Modify dt to fit niter
-        dt = ft_time / ((amrex::Real)niter);
+        m_dt = ft_time / ((amrex::Real)niter);
 
         populate_parameters();
         {
@@ -245,6 +222,12 @@ protected:
         seqn.initialize();
 
         for (int n = 0; n < niter; ++n) {
+            // Copy new to old to prep for advection
+            for (int lev = 0; lev < repo.num_active_levels(); ++lev) {
+                amrex::MultiFab::Copy(
+                    vof.state(amr_wind::FieldState::Old)(lev), vof(lev), 0, 0,
+                    vof.num_comp(), vof.num_grow());
+            }
             // Perform VOF solve
             seqn.compute_advection_term(amr_wind::FieldState::Old);
             seqn.post_solve_actions();
@@ -253,72 +236,39 @@ protected:
         }
 
         if (dir >= 0) {
-            check_accuracy(dir, m_nx, tol, vof);
+            // Create scratch field to store error
+            auto error_ptr = repo.create_scratch_field(1, 0);
+            auto& error_fld = *error_ptr;
+            // Initialize at 0
+            for (int lev = 0; lev < repo.num_active_levels(); ++lev) {
+                error_fld(lev).setVal(0.0);
+            }
+
+            get_accuracy(error_fld, dir, m_nx, vof);
+
+            // Check error in each mfab
+            constexpr amrex::Real vofsol_check = 0.0;
+            for (int lev = 0; lev < repo.num_active_levels(); ++lev) {
+                // Sum error and check
+                EXPECT_NEAR(error_fld(lev).max(0), vofsol_check, tol);
+            }
         }
     }
     const amrex::Real m_rho1 = 1000.0;
     const amrex::Real m_rho2 = 1.0;
     const amrex::Real m_vel = 5.0;
     const int m_nx = 3;
-    amrex::Real dt = 0.0; // will be set according to CFL
+    amrex::Real m_dt = 0.0; // will be set according to CFL
 };
 
-TEST_F(VOFConsTest, X)
-{
-#ifndef AMREX_USE_GPU
-    testing_coorddir(0, 0.45);
-#else
-    amrex::Print() << "VOFConsTest doesn't work on GPU yet." << std::endl;
-    GTEST_SKIP();
-#endif
-}
-TEST_F(VOFConsTest, Y)
-{
-#ifndef AMREX_USE_GPU
-    testing_coorddir(1, 0.45);
-#else
-    amrex::Print() << "VOFConsTest doesn't work on GPU yet." << std::endl;
-    GTEST_SKIP();
-#endif
-}
-TEST_F(VOFConsTest, Z)
-{
-#ifndef AMREX_USE_GPU
-    testing_coorddir(2, 0.45);
-#else
-    amrex::Print() << "VOFConsTest doesn't work on GPU yet." << std::endl;
-    GTEST_SKIP();
-#endif
-}
+TEST_F(VOFConsTest, X) { testing_coorddir(0, 0.45); }
+TEST_F(VOFConsTest, Y) { testing_coorddir(1, 0.45); }
+TEST_F(VOFConsTest, Z) { testing_coorddir(2, 0.45); }
 // Need multi-directional velocity and vof field to test communication of vof
 // during directionally-split advection
-TEST_F(VOFConsTest, CFL045)
-{
-#ifndef AMREX_USE_GPU
-    testing_coorddir(-1, 0.45);
-#else
-    amrex::Print() << "VOFConsTest doesn't work on GPU yet." << std::endl;
-    GTEST_SKIP();
-#endif
-}
-TEST_F(VOFConsTest, CFL01)
-{
-#ifndef AMREX_USE_GPU
-    testing_coorddir(-1, 0.1);
-#else
-    amrex::Print() << "VOFConsTest doesn't work on GPU yet." << std::endl;
-    GTEST_SKIP();
-#endif
-}
+TEST_F(VOFConsTest, CFL045) { testing_coorddir(-1, 0.45); }
+TEST_F(VOFConsTest, CFL01) { testing_coorddir(-1, 0.1); }
 // Test transport across multiple mesh levels - just check conservation
-TEST_F(VOFConsTest, 2level)
-{
-#ifndef AMREX_USE_GPU
-    testing_coorddir(-2, 0.5 * 0.45);
-#else
-    amrex::Print() << "VOFConsTest doesn't work on GPU yet." << std::endl;
-    GTEST_SKIP();
-#endif
-}
+TEST_F(VOFConsTest, 2level) { testing_coorddir(-2, 0.5 * 0.45); }
 
 } // namespace amr_wind_tests

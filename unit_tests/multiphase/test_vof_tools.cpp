@@ -33,7 +33,7 @@ protected:
         }
     }
 
-    amrex::Real dx = 0.25;
+    amrex::Real m_dx = 0.25;
 };
 
 namespace {
@@ -47,23 +47,19 @@ void initialize_levelset(
     const int s = shape;
     const amrex::Real dx = deltax;
     amrex::ParallelFor(gbx, [=] AMREX_GPU_DEVICE(int i, int j, int k) {
-        switch (s) {
-        case 0:
+        if (s == 0) {
             // Horizontal line
             lvs_arr(i, j, k) = 1.7 * dx;
-            break;
-        case 1:
+        } else if (s == 1) {
             // Parabola
             lvs_arr(i, j, k) =
                 1.9 * dx + 0.1 * dx * std::pow((amrex::Real)j - 0.3, 2);
-            break;
-        case 2:
+        } else if (s == 2) {
             // Cosine profile
             lvs_arr(i, j, k) =
                 2.0 * dx *
                 (1.0 +
                  std::cos(((amrex::Real)i - 1.2) / amr_wind::utils::pi()));
-            break;
         }
         // Subtract from local height
         lvs_arr(i, j, k) -= dx * ((amrex::Real)k + 0.5);
@@ -205,7 +201,7 @@ amrex::Real interface_band_test_impl(amr_wind::Field& vof)
     return error_total;
 }
 
-amrex::Real sharpen_test_impl(amr_wind::Field& vof)
+amrex::Real initvof_test_impl(amr_wind::Field& vof)
 {
     amrex::Real error_total = 0;
 
@@ -221,83 +217,20 @@ amrex::Real sharpen_test_impl(amr_wind::Field& vof)
 
                 amrex::Loop(bx, [=, &error](int i, int j, int k) noexcept {
                     // Initial VOF distribution is 0, 0.3, 0.7, or 1.0
-                    // Expected answer based on implementation of
-                    // amr_wind::multiphase::sharpen_kernel
                     amrex::Real vof_answer = 0.0;
                     if (i + j + k > 5) {
-                        // because VOF < 0.5
-                        const amrex::Real sign = -1.0;
-                        const amrex::Real delta = std::abs(0.3 - 0.5);
-                        vof_answer = 0.5 + sign * std::pow(delta, 1.0 / 3.0);
+                        vof_answer = 0.3;
                     }
                     if (i + j + k > 10) {
-                        // because VOF > 0.5
-                        const amrex::Real sign = 1.0;
-                        const amrex::Real delta = std::abs(0.7 - 0.5);
-                        vof_answer = 0.5 + sign * std::pow(delta, 1.0 / 3.0);
+                        vof_answer = 0.7;
                     }
                     // Set up a liquid cell
                     if (i == 0 && j == 0 && k == 0) {
                         vof_answer = 1.0;
                     }
-
-                    // Limit answer to VOF bounds
-                    vof_answer = std::max(0.0, std::min(1.0, vof_answer));
 
                     // Difference between actual and expected
                     error += std::abs(vof_arr(i, j, k) - vof_answer);
-                });
-
-                return error;
-            });
-    }
-    return error_total;
-}
-
-amrex::Real sharpen_test_density_impl(
-    amr_wind::Field& dens, const amrex::Real rho1, const amrex::Real rho2)
-{
-    amrex::Real error_total = 0;
-
-    for (int lev = 0; lev < dens.repo().num_active_levels(); ++lev) {
-
-        error_total += amrex::ReduceSum(
-            dens(lev), 0,
-            [=] AMREX_GPU_HOST_DEVICE(
-                amrex::Box const& bx,
-                amrex::Array4<amrex::Real const> const& dens_arr)
-                -> amrex::Real {
-                amrex::Real error = 0;
-
-                amrex::Loop(bx, [=, &error](int i, int j, int k) noexcept {
-                    // Initial VOF distribution is 0, 0.3, 0.7, or 1.0
-                    // Expected answer based on implementation of
-                    // amr_wind::multiphase::sharpen_kernel
-                    amrex::Real vof_answer = 0.0;
-                    if (i + j + k > 5) {
-                        // because VOF < 0.5
-                        const amrex::Real sign = -1.0;
-                        const amrex::Real delta = std::abs(0.3 - 0.5);
-                        vof_answer = 0.5 + sign * std::pow(delta, 1.0 / 3.0);
-                    }
-                    if (i + j + k > 10) {
-                        // because VOF > 0.5
-                        const amrex::Real sign = 1.0;
-                        const amrex::Real delta = std::abs(0.7 - 0.5);
-                        vof_answer = 0.5 + sign * std::pow(delta, 1.0 / 3.0);
-                    }
-                    // Set up a liquid cell
-                    if (i == 0 && j == 0 && k == 0) {
-                        vof_answer = 1.0;
-                    }
-
-                    // Limit answer to VOF bounds
-                    vof_answer = std::max(0.0, std::min(1.0, vof_answer));
-
-                    // Difference between actual and expected
-                    const amrex::Real dens_answer =
-                        rho1 * vof_answer + rho2 * (1.0 - vof_answer);
-                    error += std::abs(dens_arr(i, j, k) - dens_answer);
                 });
 
                 return error;
@@ -350,23 +283,23 @@ TEST_F(VOFToolTest, levelset_to_vof)
 
     amrex::Real error_total = 0.0;
     // profile 0: horizontal
-    init_lvs(0, dx, levelset);
-    error_total = levelset_to_vof_test_impl(dx, levelset);
+    init_lvs(0, m_dx, levelset);
+    error_total = levelset_to_vof_test_impl(m_dx, levelset);
     amrex::ParallelDescriptor::ReduceRealSum(error_total);
     EXPECT_NEAR(error_total, 0.0, 1e-12);
     //  profile 1: parabola
-    init_lvs(1, dx, levelset);
-    error_total = levelset_to_vof_test_impl(dx, levelset);
+    init_lvs(1, m_dx, levelset);
+    error_total = levelset_to_vof_test_impl(m_dx, levelset);
     amrex::ParallelDescriptor::ReduceRealSum(error_total);
     EXPECT_NEAR(error_total, 0.0, 0.011);
     // profile 2: cosine
-    init_lvs(2, dx, levelset);
-    error_total = levelset_to_vof_test_impl(dx, levelset);
+    init_lvs(2, m_dx, levelset);
+    error_total = levelset_to_vof_test_impl(m_dx, levelset);
     amrex::ParallelDescriptor::ReduceRealSum(error_total);
     EXPECT_NEAR(error_total, 0.0, 0.016);
 }
 
-TEST_F(VOFToolTest, sharpen_acquired_vof)
+TEST_F(VOFToolTest, replace_masked_vof)
 {
 
     populate_parameters();
@@ -376,100 +309,21 @@ TEST_F(VOFToolTest, sharpen_acquired_vof)
     const int ncomp = 1;
     const int nghost = 3;
     const int nghost_int = 1;
-    auto& vof = repo.declare_field("vof", ncomp, nghost);
+    auto& vof_new = repo.declare_field("vof", ncomp, nghost);
+    auto& vof_mod = repo.declare_field("vof_mod", ncomp, nghost);
     auto& iblank = repo.declare_int_field("iblank_cell", ncomp, nghost_int);
 
     // Use as if entire domain is from nalu
     iblank.setVal(-1);
-    // Initialize and sharpen vof
-    init_vof(vof);
-    amr_wind::multiphase::sharpen_acquired_vof(1, iblank, vof);
+    // Initialize vof
+    init_vof(vof_new);
+    // Initialize other field (working copy of vof)
+    vof_mod.setVal(100.0);
+    // Replace masked vof values with new ones
+    amr_wind::multiphase::replace_masked_vof(1, iblank, vof_mod, vof_new);
 
     // Check results
-    amrex::Real error_total = sharpen_test_impl(vof);
-    amrex::ParallelDescriptor::ReduceRealSum(error_total);
-    EXPECT_NEAR(error_total, 0.0, 1e-15);
-}
-
-TEST_F(VOFToolTest, sharpen_replace_old_density)
-{
-
-    const amrex::Real rho1 = 1000.0;
-    const amrex::Real rho2 = 1.0;
-    populate_parameters();
-    {
-        amrex::ParmParse pp("geometry");
-        amrex::Vector<int> periodic{{1, 1, 1}};
-        pp.addarr("is_periodic", periodic);
-    }
-    {
-        amrex::ParmParse pp("MultiPhase");
-        pp.add("density_fluid1", rho1);
-        pp.add("density_fluid2", rho2);
-    }
-    {
-        amrex::ParmParse pp("incflo");
-        amrex::Vector<std::string> physics{"MultiPhase"};
-        pp.addarr("physics", physics);
-        pp.add("use_godunov", (int)1);
-    }
-
-    initialize_mesh();
-
-    auto& repo = sim().repo();
-
-    // PDE manager, for access to VOF PDE later
-    auto& pde_mgr = sim().pde_manager();
-    // Setup of icns provides MAC velocities
-    pde_mgr.register_icns();
-
-    // Initialize physics for the sake of MultiPhase routines
-    sim().init_physics();
-
-    // Initialize volume fraction field
-    auto& vof = repo.get_field("vof");
-
-    // Set up iblank field
-    const int ncomp = 1;
-    const int nghost_int = 1;
-    auto& iblank = repo.declare_int_field("iblank_cell", ncomp, nghost_int);
-    // Use as if entire domain is from nalu
-    iblank.setVal(-1);
-
-    // Initialize vof
-    init_vof(vof);
-
-    // Initialize advective velocities with something
-    auto& umac = repo.get_field("u_mac");
-    auto& vmac = repo.get_field("v_mac");
-    auto& wmac = repo.get_field("w_mac");
-    umac.setVal(1.0);
-    vmac.setVal(1.0);
-    wmac.setVal(1.0);
-
-    // Get vof equation handle and perform init
-    auto& seqn = pde_mgr(
-        amr_wind::pde::VOF::pde_name() + "-" +
-        amr_wind::fvm::Godunov::scheme_name());
-    seqn.initialize();
-
-    // Do advection step (which results in sharpening and in copying of
-    // sharpened vof to old vof)
-    seqn.compute_advection_term(amr_wind::FieldState::Old);
-
-    // Check that old vof is equal to the sharpened solution
-    amrex::Real error_total =
-        sharpen_test_impl(vof.state(amr_wind::FieldState::Old));
-    amrex::ParallelDescriptor::ReduceRealSum(error_total);
-    EXPECT_NEAR(error_total, 0.0, 1e-15);
-
-    // Do post solve (which recalculates old density with old vof)
-    seqn.post_solve_actions();
-
-    // Check old density
-    auto& dens = repo.get_field("density");
-    error_total = sharpen_test_density_impl(
-        dens.state(amr_wind::FieldState::Old), rho1, rho2);
+    amrex::Real error_total = initvof_test_impl(vof_mod);
     amrex::ParallelDescriptor::ReduceRealSum(error_total);
     EXPECT_NEAR(error_total, 0.0, 1e-15);
 }

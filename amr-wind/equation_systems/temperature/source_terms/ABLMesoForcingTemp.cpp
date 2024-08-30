@@ -3,6 +3,7 @@
 #include "amr-wind/wind_energy/ABL.H"
 #include "amr-wind/core/FieldUtils.H"
 #include "amr-wind/utilities/ncutils/nc_interface.H"
+#include "amr-wind/utilities/index_operations.H"
 #include "AMReX_ParmParse.H"
 #include "AMReX_Gpu.H"
 #include "AMReX_Print.H"
@@ -10,20 +11,6 @@
 #include <memory>
 
 namespace amr_wind::pde::temperature {
-
-namespace {
-
-//! Return closest index (from lower) of value in vector
-AMREX_FORCE_INLINE int
-closest_index(const amrex::Vector<amrex::Real>& vec, const amrex::Real value)
-{
-    auto const it = std::upper_bound(vec.begin(), vec.end(), value);
-    AMREX_ALWAYS_ASSERT(it != vec.end());
-
-    const int idx = static_cast<int>(std::distance(vec.begin(), it));
-    return std::max(idx - 1, 0);
-}
-} // namespace
 
 ABLMesoForcingTemp::ABLMesoForcingTemp(const CFDSim& sim)
     : ABLMesoscaleForcing(sim, identifier())
@@ -41,7 +28,7 @@ ABLMesoForcingTemp::ABLMesoForcingTemp(const CFDSim& sim)
 
     if ((amrex::toLower(m_forcing_scheme) == "indirect") &&
         !m_update_transition_height) {
-        indirectForcingInit(); // do this once
+        indirect_forcing_init(); // do this once
     }
 }
 
@@ -105,9 +92,9 @@ amrex::Real ABLMesoForcingTemp::mean_temperature_heights(
     currtime = m_time.current_time();
 
     // First the index in time
-    m_idx_time = closest_index(ncfile->meso_times(), currtime);
+    m_idx_time = utils::closest_index(ncfile->meso_times(), currtime);
 
-    amrex::Array<amrex::Real, 2> coeff_interp{{0.0, 0.0}};
+    amrex::Array<amrex::Real, 2> coeff_interp{0.0, 0.0};
 
     amrex::Real denom =
         ncfile->meso_times()[m_idx_time + 1] - ncfile->meso_times()[m_idx_time];
@@ -157,9 +144,9 @@ amrex::Real ABLMesoForcingTemp::mean_temperature_heights(
     currtime = m_time.current_time();
 
     // First the index in time
-    m_idx_time = closest_index(ncfile->meso_times(), currtime);
+    m_idx_time = utils::closest_index(ncfile->meso_times(), currtime);
 
-    amrex::Array<amrex::Real, 2> coeff_interp{{0.0, 0.0}};
+    amrex::Array<amrex::Real, 2> coeff_interp{0.0, 0.0};
 
     amrex::Real denom =
         ncfile->meso_times()[m_idx_time + 1] - ncfile->meso_times()[m_idx_time];
@@ -215,8 +202,8 @@ amrex::Real ABLMesoForcingTemp::mean_temperature_heights(
             amrex::Print() << "current transition height = "
                            << m_transition_height << std::endl;
 
-            setTransitionWeighting();
-            indirectForcingInit();
+            set_transition_weighting();
+            indirect_forcing_init();
         }
 
         amrex::Array<amrex::Real, 4> ezP_T;
@@ -260,7 +247,7 @@ amrex::Real ABLMesoForcingTemp::mean_temperature_heights(
         }
 
         if (amrex::toLower(m_forcing_transition) == "indirecttodirect") {
-            blendForcings(error_T, error_T_direct, error_T);
+            blend_forcings(error_T, error_T_direct, error_T);
 
             if (m_debug) {
                 for (size_t ih = 0; ih < n_levels; ih++) {
@@ -271,8 +258,8 @@ amrex::Real ABLMesoForcingTemp::mean_temperature_heights(
         }
     }
 
-    if (forcingToConstant()) {
-        constantForcingTransition(error_T);
+    if (forcing_to_constant()) {
+        constant_forcing_transition(error_T);
 
         if (m_debug) {
             for (size_t ih = 0; ih < n_levels; ih++) {
@@ -303,7 +290,7 @@ void ABLMesoForcingTemp::operator()(
         return;
     }
 
-    const auto& dt = m_time.deltaT();
+    const auto& dt = m_time.delta_t();
     const auto& problo = m_mesh.Geom(lev).ProbLoArray();
     const auto& dx = m_mesh.Geom(lev).CellSizeArray();
 

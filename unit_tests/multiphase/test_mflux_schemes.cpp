@@ -1,8 +1,6 @@
 
 #include "aw_test_utils/MeshTest.H"
-
-#include "amr-wind/convection/incflo_godunov_minmod.H"
-#include "amr-wind/convection/incflo_godunov_upwind.H"
+#include "hydro_godunov_ppm.H"
 
 namespace amr_wind_tests {
 
@@ -62,24 +60,37 @@ void init_scalar_uniform(amr_wind::Field& fld, amrex::Real cst)
 
 void get_output_upwind(
     amr_wind::Field& fld,
+    amr_wind::Field& mac_fld,
+    amrex::Real dt,
     int ii,
     int jj,
     int kk,
     amrex::Real& Im,
     amrex::Real& Ip)
 {
+    const int nlevels = fld.repo().num_active_levels();
     amrex::Gpu::DeviceVector<amrex::Real> dout(2, 0.0);
     auto* dout_ptr = dout.data();
-    const int nlevels = fld.repo().num_active_levels();
+    const auto* pbc = fld.bcrec_device().data();
+
     for (int lev = 0; lev < nlevels; ++lev) {
+        const auto& dx = fld.repo().mesh().Geom(lev).CellSizeArray();
+        amrex::Box const& domain = fld.repo().mesh().Geom(lev).Domain();
+        const auto dlo = amrex::lbound(domain);
+        const auto dhi = amrex::ubound(domain);
+
+        auto limiter = PPM::upwind();
 
         for (amrex::MFIter mfi(fld(lev)); mfi.isValid(); ++mfi) {
             auto bx = mfi.validbox();
             const auto& farr = fld(lev).const_array(mfi);
+            const auto& vel_mac = mac_fld(lev).const_array(mfi);
 
             amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE(int i, int j, int k) {
                 amrex::Real im_tmp, ip_tmp;
-                Godunov_upwind_fpu(i, j, k, 0, im_tmp, ip_tmp, farr);
+                PPM::PredictStateOnXFace(
+                    i, j, k, 0, dt, dx[0], im_tmp, ip_tmp, farr, vel_mac,
+                    pbc[0], dlo.x, dhi.x, limiter, PPM::UPWIND);
                 if (i == ii && j == jj && k == kk) {
                     dout_ptr[0] = im_tmp;
                     dout_ptr[1] = ip_tmp;
@@ -107,6 +118,9 @@ void get_output_minmod(
     amrex::Gpu::DeviceVector<amrex::Real> dout(2, 0.0);
     auto* dout_ptr = dout.data();
     const auto* pbc = fld.bcrec_device().data();
+
+    auto limiter = PPM::minmod();
+
     for (int lev = 0; lev < nlevels; ++lev) {
         const auto& dx = fld.repo().mesh().Geom(lev).CellSizeArray();
         amrex::Box const& domain = fld.repo().mesh().Geom(lev).Domain();
@@ -121,25 +135,18 @@ void get_output_minmod(
             amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE(int i, int j, int k) {
                 amrex::Real im_tmp = 0.0;
                 amrex::Real ip_tmp = 0.0;
-                switch (dir) {
-                case 0: {
-                    Godunov_minmod_fpu_x(
+                if (dir == 0) {
+                    PPM::PredictStateOnXFace(
                         i, j, k, 0, dt, dx[0], im_tmp, ip_tmp, farr, vel_mac,
-                        pbc[0], dlo.x, dhi.x);
-                    break;
-                }
-                case 1: {
-                    Godunov_minmod_fpu_y(
+                        pbc[0], dlo.x, dhi.x, limiter, PPM::MINMOD);
+                } else if (dir == 1) {
+                    PPM::PredictStateOnYFace(
                         i, j, k, 0, dt, dx[1], im_tmp, ip_tmp, farr, vel_mac,
-                        pbc[0], dlo.y, dhi.y);
-                    break;
-                }
-                case 2: {
-                    Godunov_minmod_fpu_z(
+                        pbc[0], dlo.y, dhi.y, limiter, PPM::MINMOD);
+                } else if (dir == 2) {
+                    PPM::PredictStateOnZFace(
                         i, j, k, 0, dt, dx[2], im_tmp, ip_tmp, farr, vel_mac,
-                        pbc[0], dlo.z, dhi.z);
-                    break;
-                }
+                        pbc[0], dlo.z, dhi.z, limiter, PPM::MINMOD);
                 }
                 if (i == ii && j == jj && k == kk) {
                     dout_ptr[0] = im_tmp;
@@ -164,22 +171,22 @@ protected:
 
         {
             amrex::ParmParse pp("amr");
-            amrex::Vector<int> ncell{{nx, nx, nx}};
+            amrex::Vector<int> ncell{{m_nx, m_nx, m_nx}};
             pp.add("max_level", 0);
-            pp.add("max_grid_size", nx);
+            pp.add("max_grid_size", m_nx);
             pp.addarr("n_cell", ncell);
         }
         {
             amrex::ParmParse pp("geometry");
-            pp.addarr("prob_lo", problo);
-            pp.addarr("prob_hi", probhi);
+            pp.addarr("prob_lo", m_problo);
+            pp.addarr("prob_hi", m_probhi);
         }
     }
     // Parameters
-    const amrex::Vector<amrex::Real> problo{{0.0, -1.0, 0.0}};
-    const amrex::Vector<amrex::Real> probhi{{2.0, +1.0, 2.0}};
-    const int nx = 5;
-    const amrex::Real tol = 1e-12;
+    const amrex::Vector<amrex::Real> m_problo{{0.0, -1.0, 0.0}};
+    const amrex::Vector<amrex::Real> m_probhi{{2.0, +1.0, 2.0}};
+    const int m_nx = 5;
+    const amrex::Real m_tol = 1e-12;
 };
 
 TEST_F(MFluxSchemeTest, upwind)
@@ -192,42 +199,61 @@ TEST_F(MFluxSchemeTest, upwind)
     amrex::Real Ip = 0.0;
 
     // Initialize field variable
-    auto& sc = repo.declare_field("scalar", 1, 1);
+    auto& sc = repo.declare_field("scalar", 1, 2);
+
+    // Parameters to be referenced during test
+    amrex::Real adv_vel = 1.2;
+    amrex::Real dt = 0.25;
+
+    // Initialize mac velocity
+    repo.declare_face_normal_field({"umac", "vmac", "wmac"}, 1, 1, 1);
+    auto& umac = repo.get_field("umac");
+    auto& vmac = repo.get_field("vmac");
+    auto& wmac = repo.get_field("wmac");
+    umac.setVal(adv_vel);
+    vmac.setVal(adv_vel);
+    wmac.setVal(-adv_vel);
 
     /* -- Constant field portion of test -- */
     // Set up field
     amrex::Real sc_cst = 1.5;
     init_scalar_uniform(sc, sc_cst);
     // Compute interpolated quantities at each face
-    int i = nx / 2;
-    int j = nx / 2;
-    int k = nx / 2;
-    get_output_upwind(sc, i, j, k, Im, Ip);
+    int i = m_nx / 2;
+    int j = m_nx / 2;
+    int k = m_nx / 2;
+    get_output_upwind(sc, umac, dt, i, j, k, Im, Ip);
     // Check values
-    EXPECT_NEAR(sc_cst, Im, tol);
-    EXPECT_NEAR(sc_cst, Ip, tol);
-
-    /* -- Increasing in slope: x, y, z -- */
-    for (int n = 0; n < 3; ++n) {
-        // Set up field
-        init_scalar_increasing(sc, n);
-        // Compute interpolated quantities at each face
-        get_output_upwind(sc, i, j, k, Im, Ip);
-        // Check values
-        EXPECT_NEAR(i * i, Im, tol);
-        EXPECT_NEAR(i * i, Ip, tol);
-    }
+    EXPECT_NEAR(sc_cst, Im, m_tol);
+    EXPECT_NEAR(sc_cst, Ip, m_tol);
 
     /* -- Change in sign of slope: x, y, z -- */
-    for (int n = 0; n < 3; ++n) {
-        // Set up field
-        init_scalar_slopechange(sc, n, i);
-        // Compute interpolated quantities at each face
-        get_output_upwind(sc, i, j, k, Im, Ip);
-        // Check values
-        EXPECT_NEAR(0, Im, tol);
-        EXPECT_NEAR(0, Ip, tol);
-    }
+    // Set up field
+    int n = 0;
+    init_scalar_slopechange(sc, n, i);
+    // Compute interpolated quantities at each face
+    get_output_upwind(sc, umac, dt, i, j, k, Im, Ip);
+    // Check values
+    EXPECT_NEAR(0, Im, m_tol);
+    EXPECT_NEAR(0, Ip, m_tol);
+
+    // Set up field
+    n = 1;
+    init_scalar_slopechange(sc, n, i);
+    // Compute interpolated quantities at each face
+    get_output_upwind(sc, vmac, dt, i, j, k, Im, Ip);
+    // Check values
+    EXPECT_NEAR(0, Im, m_tol);
+    EXPECT_NEAR(0, Ip, m_tol);
+
+    // Set up field
+    n = 2;
+    init_scalar_slopechange(sc, n, i);
+    // Compute interpolated quantities at each face
+    get_output_upwind(sc, wmac, dt, i, j, k, Im, Ip);
+    // Check values
+    EXPECT_NEAR(0, Im, m_tol);
+    EXPECT_NEAR(0, Ip, m_tol);
 }
 
 TEST_F(MFluxSchemeTest, minmod)
@@ -244,7 +270,7 @@ TEST_F(MFluxSchemeTest, minmod)
     amrex::Real Ip = 0.0;
 
     // Initialize field variable
-    auto& sc = repo.declare_field("scalar", 1, 1);
+    auto& sc = repo.declare_field("scalar", 1, 2);
 
     // Initialize mac velocity
     repo.declare_face_normal_field({"umac", "vmac", "wmac"}, 1, 1, 1);
@@ -260,13 +286,13 @@ TEST_F(MFluxSchemeTest, minmod)
     amrex::Real sc_cst = 1.5;
     init_scalar_uniform(sc, sc_cst);
     // Compute interpolated quantities at each face
-    int i = nx / 2;
-    int j = nx / 2;
-    int k = nx / 2;
+    int i = m_nx / 2;
+    int j = m_nx / 2;
+    int k = m_nx / 2;
     get_output_minmod(sc, umac, dt, i, j, k, 0, Im, Ip);
     // Check values
-    EXPECT_NEAR(sc_cst, Im, tol);
-    EXPECT_NEAR(sc_cst, Ip, tol);
+    EXPECT_NEAR(sc_cst, Im, m_tol);
+    EXPECT_NEAR(sc_cst, Ip, m_tol);
 
     /* -- Increasing in slope: x, y, z -- */
     // Values for checking
@@ -279,20 +305,20 @@ TEST_F(MFluxSchemeTest, minmod)
     init_scalar_increasing(sc, 0);
     // Compute interpolated quantities at each face
     get_output_minmod(sc, umac, dt, i, j, k, 0, Im, Ip);
-    EXPECT_NEAR(i * i, Im, tol);
-    EXPECT_NEAR(val_p, Ip, tol);
+    EXPECT_NEAR(i * i, Im, m_tol);
+    EXPECT_NEAR(val_p, Ip, m_tol);
     // Set up field (y)
     init_scalar_increasing(sc, 1);
     // Compute interpolated quantities at each face
     get_output_minmod(sc, vmac, dt, i, j, k, 1, Im, Ip);
-    EXPECT_NEAR(i * i, Im, tol);
-    EXPECT_NEAR(val_p, Ip, tol);
+    EXPECT_NEAR(i * i, Im, m_tol);
+    EXPECT_NEAR(val_p, Ip, m_tol);
     // Set up field (z)
     init_scalar_increasing(sc, 2);
     // Compute interpolated quantities at each face
     get_output_minmod(sc, wmac, dt, i, j, k, 2, Im, Ip);
-    EXPECT_NEAR(val_n, Im, tol);
-    EXPECT_NEAR(i * i, Ip, tol);
+    EXPECT_NEAR(val_n, Im, m_tol);
+    EXPECT_NEAR(i * i, Ip, m_tol);
 
     /* -- Change in sign of slope -- */
     // Set up field (x)
@@ -300,8 +326,8 @@ TEST_F(MFluxSchemeTest, minmod)
     // Compute interpolated quantities at each face
     get_output_minmod(sc, umac, dt, i, j, k, 0, Im, Ip);
     // Check values
-    EXPECT_NEAR(0, Im, tol);
-    EXPECT_NEAR(0, Ip, tol);
+    EXPECT_NEAR(0, Im, m_tol);
+    EXPECT_NEAR(0, Ip, m_tol);
 }
 
 TEST_F(MFluxSchemeTest, minmodbdy)
@@ -318,7 +344,7 @@ TEST_F(MFluxSchemeTest, minmodbdy)
     amrex::Real Ip = 0.0;
 
     // Initialize field variable
-    auto& sc = repo.declare_field("scalar", 1, 1);
+    auto& sc = repo.declare_field("scalar", 1, 2);
 
     // Initialize mac velocity
     repo.declare_face_normal_field({"umac", "vmac", "wmac"}, 1, 1, 1);
@@ -338,8 +364,8 @@ TEST_F(MFluxSchemeTest, minmodbdy)
     {
         // Look at lo boundary behavior
         int i = 0;
-        int j = nx / 2;
-        int k = nx / 2;
+        int j = m_nx / 2;
+        int k = m_nx / 2;
         // Values for checking
         auto ir = (amrex::Real)i;
         amrex::Real dx = sc.repo().mesh().Geom(0).CellSizeArray()[0];
@@ -349,14 +375,14 @@ TEST_F(MFluxSchemeTest, minmodbdy)
         init_scalar_increasing(sc, 0);
         // Compute interpolated quantities at each face
         get_output_minmod(sc, umac, dt, i, j, k, 0, Im, Ip);
-        EXPECT_NEAR(val_n, Im, tol);
-        EXPECT_NEAR(ir * ir, Ip, tol);
+        EXPECT_NEAR(val_n, Im, m_tol);
+        EXPECT_NEAR(ir * ir, Ip, m_tol);
     }
     {
         // Look at hi boundary behavior
-        int i = nx / 2;
-        int j = nx - 1;
-        int k = nx / 2;
+        int i = m_nx / 2;
+        int j = m_nx - 1;
+        int k = m_nx / 2;
         // Values for checking
         auto ir = (amrex::Real)j;
         amrex::Real dx = sc.repo().mesh().Geom(0).CellSizeArray()[0];
@@ -366,8 +392,8 @@ TEST_F(MFluxSchemeTest, minmodbdy)
         init_scalar_increasing(sc, 1);
         // Compute interpolated quantities at each face
         get_output_minmod(sc, vmac, dt, i, j, k, 1, Im, Ip);
-        EXPECT_NEAR(ir * ir, Im, tol);
-        EXPECT_NEAR(val_p, Ip, tol);
+        EXPECT_NEAR(ir * ir, Im, m_tol);
+        EXPECT_NEAR(val_p, Ip, m_tol);
     }
 }
 

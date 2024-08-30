@@ -33,10 +33,11 @@ void read_inputs(
     } else {
         pp.query("numerical_beach_length", wdata.beach_length);
         wdata.has_beach = true;
+        pp.query("numerical_beach_length_factor", wdata.beach_length_factor);
         pp.query("initialize_wave_field", wdata.init_wave_field);
     }
 
-    pp.query("timeramp", wdata.has_ramp);
+    wdata.has_ramp = pp.contains("timeramp_period");
     if (wdata.has_ramp) {
         pp.query("timeramp_period", wdata.ramp_period);
     }
@@ -100,6 +101,7 @@ void apply_relaxation_zones(CFDSim& sim, const RelaxZonesBaseData& wdata)
 
             const amrex::Real gen_length = wdata.gen_length;
             const amrex::Real beach_length = wdata.beach_length;
+            const amrex::Real beach_length_factor = wdata.beach_length_factor;
             const amrex::Real zsl = wdata.zsl;
             const bool has_beach = wdata.has_beach;
             const bool has_outprofile = wdata.has_outprofile;
@@ -116,7 +118,7 @@ void apply_relaxation_zones(CFDSim& sim, const RelaxZonesBaseData& wdata)
                     // Generation region
                     if (x <= problo[0] + gen_length) {
                         const amrex::Real Gamma =
-                            utils::Gamma_generate(x - problo[0], gen_length);
+                            utils::gamma_generate(x - problo[0], gen_length);
                         const amrex::Real vf =
                             (1. - Gamma) * target_volfrac(i, j, k) * rampf +
                             Gamma * volfrac(i, j, k);
@@ -148,8 +150,9 @@ void apply_relaxation_zones(CFDSim& sim, const RelaxZonesBaseData& wdata)
                     }
                     // Numerical beach (sponge layer)
                     if (x + beach_length >= probhi[0]) {
-                        const amrex::Real Gamma = utils::Gamma_absorb(
-                            x - (probhi[0] - beach_length), beach_length, 1.0);
+                        const amrex::Real Gamma = utils::gamma_absorb(
+                            x - (probhi[0] - beach_length), beach_length,
+                            beach_length_factor);
                         if (has_beach) {
                             volfrac(i, j, k) =
                                 (1.0 - Gamma) *
@@ -162,12 +165,12 @@ void apply_relaxation_zones(CFDSim& sim, const RelaxZonesBaseData& wdata)
                             vel(i, j, k, 0) = (rho1 * volfrac(i, j, k) * Gamma +
                                                rho2 * (1. - volfrac(i, j, k))) *
                                               vel(i, j, k, 0) / rho_;
-                            vel(i, j, k, 0) = (rho1 * volfrac(i, j, k) * Gamma +
+                            vel(i, j, k, 1) = (rho1 * volfrac(i, j, k) * Gamma +
                                                rho2 * (1. - volfrac(i, j, k))) *
-                                              vel(i, j, k, 0) / rho_;
-                            vel(i, j, k, 0) = (rho1 * volfrac(i, j, k) * Gamma +
+                                              vel(i, j, k, 1) / rho_;
+                            vel(i, j, k, 2) = (rho1 * volfrac(i, j, k) * Gamma +
                                                rho2 * (1. - volfrac(i, j, k))) *
-                                              vel(i, j, k, 0) / rho_;
+                                              vel(i, j, k, 2) / rho_;
                         }
                         if (has_outprofile) {
                             const amrex::Real vf =

@@ -45,8 +45,8 @@ public:
     //! Implementation that handles filling patches on a single level as well as
     //! across a coarse-fine interface.
     virtual void fillpatch(
-        int lev,
-        amrex::Real time,
+        const int lev,
+        const amrex::Real time,
         amrex::MultiFab& mfab,
         const amrex::IntVect& nghost,
         const FieldState fstate = FieldState::New) = 0;
@@ -54,8 +54,8 @@ public:
     //! Implementation that handles filling patches on a single level as well as
     //! across a coarse-fine interface, for an array of different fields
     virtual void fillpatch_sibling_fields(
-        int lev,
-        amrex::Real time,
+        const int lev,
+        const amrex::Real time,
         amrex::Array<amrex::MultiFab*, AMREX_SPACEDIM>& mfabs,
         amrex::Array<amrex::MultiFab*, AMREX_SPACEDIM>& ffabs,
         amrex::Array<amrex::MultiFab*, AMREX_SPACEDIM>& cfabs,
@@ -65,26 +65,31 @@ public:
 
     //! Implementation that handles filling patches from a coarse to fine level
     virtual void fillpatch_from_coarse(
-        int lev,
-        amrex::Real time,
+        const int lev,
+        const amrex::Real time,
         amrex::MultiFab& mfab,
         const amrex::IntVect& nghost,
         const FieldState fstate = FieldState::New) = 0;
 
     //! Implementation that handles filling physical boundary conditions
     virtual void fillphysbc(
-        int lev,
-        amrex::Real time,
+        const int lev,
+        const amrex::Real time,
         amrex::MultiFab& mfab,
         const amrex::IntVect& nghost,
         const FieldState fstate = FieldState::New) = 0;
 
     virtual void set_inflow(
-        int lev,
-        amrex::Real time,
+        const int lev,
+        const amrex::Real time,
         amrex::MultiFab& mfab,
         const amrex::IntVect& nghost,
         const FieldState fstate = FieldState::New) = 0;
+
+    virtual void set_inflow_sibling_fields(
+        const int lev,
+        const amrex::Real time,
+        amrex::Array<amrex::MultiFab*, AMREX_SPACEDIM> mfabs) = 0;
 };
 
 /** Implementation that just fills a constant value on newly created grids
@@ -226,7 +231,6 @@ public:
         return ret;
     }
 
-#if 1
     // Version that does no interpolation in time
 
     void fillpatch(
@@ -259,47 +263,6 @@ public:
         }
     }
 
-#else
-    // Version that handles fields at two states and performs interpolation in
-    // time.
-
-    void fillpatch(
-        int lev,
-        amrex::Real time,
-        amrex::MultiFab& mfab,
-        const amrex::IntVect& nghost) override
-    {
-        auto mfab_vec_lev = get_mfab_vec(lev);
-        if (lev == 0) {
-            amrex::PhysBCFunct<amrex::GpuBndryFuncFab<Functor>> physbc(
-                m_mesh.Geom(lev), m_field.bcrec(), bc_functor());
-
-            amrex::FillPatchSingleLevel(
-                mfab, nghost, time, mfab_vec_lev,
-                {m_time.current_time(), m_time.new_time()}, 0, 0,
-                m_field.num_comp(), m_mesh.Geom(lev), physbc, 0);
-        } else {
-            amrex::PhysBCFunct<amrex::GpuBndryFuncFab<Functor>> cphysbc(
-                m_mesh.Geom(lev - 1), m_field.bcrec(), bc_functor());
-
-            amrex::PhysBCFunct<amrex::GpuBndryFuncFab<Functor>> fphysbc(
-                m_mesh.Geom(lev), m_field.bcrec(), bc_functor());
-
-            auto mfab_vec_levm1 = get_mfab_vec(lev - 1);
-
-            amrex::FillPatchTwoLevels(
-                mfab, nghost, time, mfab_vec_levm1,
-                {m_time.current_time(), m_time.new_time()}, mfab_vec_lev,
-                {m_time.current_time(), m_time.new_time()}, 0, 0,
-                m_field.num_comp(), m_mesh.Geom(lev - 1), m_mesh.Geom(lev),
-                cphysbc, 0, fphysbc, 0, m_mesh.refRatio(lev - 1), m_mapper,
-                m_field.bcrec(), 0);
-        }
-        amrex::Print() << lev << " " << m_time.current_time() << " "
-                       << m_time.new_time() << std::endl;
-    }
-#endif
-
     void fillpatch_sibling_fields(
         int lev,
         amrex::Real time,
@@ -312,29 +275,39 @@ public:
     {
 
         if (lev == 0) {
-            amrex::PhysBCFunct<amrex::GpuBndryFuncFab<Functor>> physbc(
-                m_mesh.Geom(lev), bcrec, bc_functor());
             for (int i = 0; i < static_cast<int>(mfabs.size()); i++) {
+                amrex::PhysBCFunct<amrex::GpuBndryFuncFab<Functor>> physbc(
+                    m_mesh.Geom(lev), bcrec, bc_functor_face(i));
                 amrex::FillPatchSingleLevel(
                     *mfabs[i], nghost, time, {ffabs[i]}, {time}, 0, 0, 1,
                     m_mesh.Geom(lev), physbc, i);
             }
         } else {
-            amrex::PhysBCFunct<amrex::GpuBndryFuncFab<Functor>> cphysbc(
-                m_mesh.Geom(lev - 1), bcrec, bc_functor());
+            AMREX_D_TERM(
+                amrex::PhysBCFunct<amrex::GpuBndryFuncFab<Functor>> cphysbcx(
+                    m_mesh.Geom(lev - 1), bcrec, bc_functor_face(0));
+                , amrex::PhysBCFunct<amrex::GpuBndryFuncFab<Functor>> cphysbcy(
+                      m_mesh.Geom(lev - 1), bcrec, bc_functor_face(1));
+                , amrex::PhysBCFunct<amrex::GpuBndryFuncFab<Functor>> cphysbcz(
+                      m_mesh.Geom(lev - 1), bcrec, bc_functor_face(2)););
 
-            amrex::PhysBCFunct<amrex::GpuBndryFuncFab<Functor>> fphysbc(
-                m_mesh.Geom(lev), bcrec, bc_functor());
+            AMREX_D_TERM(
+                amrex::PhysBCFunct<amrex::GpuBndryFuncFab<Functor>> fphysbcx(
+                    m_mesh.Geom(lev), bcrec, bc_functor_face(0));
+                , amrex::PhysBCFunct<amrex::GpuBndryFuncFab<Functor>> fphysbcy(
+                      m_mesh.Geom(lev), bcrec, bc_functor_face(1));
+                , amrex::PhysBCFunct<amrex::GpuBndryFuncFab<Functor>> fphysbcz(
+                      m_mesh.Geom(lev), bcrec, bc_functor_face(2)););
 
             amrex::Array<
                 amrex::PhysBCFunct<amrex::GpuBndryFuncFab<Functor>>,
                 AMREX_SPACEDIM>
-                cphysbc_arr = {AMREX_D_DECL(cphysbc, cphysbc, cphysbc)};
+                cphysbc_arr = {AMREX_D_DECL(cphysbcx, cphysbcy, cphysbcz)};
 
             amrex::Array<
                 amrex::PhysBCFunct<amrex::GpuBndryFuncFab<Functor>>,
                 AMREX_SPACEDIM>
-                fphysbc_arr = {AMREX_D_DECL(fphysbc, fphysbc, fphysbc)};
+                fphysbc_arr = {AMREX_D_DECL(fphysbcx, fphysbcy, fphysbcz)};
 
             amrex::Array<int, AMREX_SPACEDIM> idx = {AMREX_D_DECL(0, 1, 2)};
             const amrex::Array<amrex::Vector<amrex::BCRec>, AMREX_SPACEDIM>
@@ -396,8 +369,9 @@ public:
         const auto& ncomp = m_field.num_comp();
 
         for (amrex::OrientationIter oit; oit != nullptr; ++oit) {
-            auto ori = oit();
-            if (bctype[ori] != BC::mass_inflow) {
+            const auto ori = oit();
+            if ((bctype[ori] != BC::mass_inflow) &&
+                (bctype[ori] != BC::mass_inflow_outflow)) {
                 continue;
             }
 
@@ -406,6 +380,9 @@ public:
                 ori.isLow() ? amrex::adjCellLo(domain, idir, nghost[idir])
                             : amrex::adjCellHi(domain, idir, nghost[idir]);
 
+#ifdef AMREX_USE_OMP
+#pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
+#endif
             for (amrex::MFIter mfi(mfab); mfi.isValid(); ++mfi) {
                 const auto& gbx = amrex::grow(mfi.validbox(), nghost);
                 const auto& bx = gbx & dbx;
@@ -426,8 +403,78 @@ public:
         }
     }
 
+    void set_inflow_sibling_fields(
+        const int lev,
+        const amrex::Real time,
+        const amrex::Array<amrex::MultiFab*, AMREX_SPACEDIM> mfabs) override
+    {
+        const auto& bctype = m_field.bc_type();
+        const auto& geom = m_mesh.Geom(lev);
+        const auto& gdata = geom.data();
+        const auto& bcfunc = bc_functor();
+
+        for (amrex::OrientationIter oit; oit != nullptr; ++oit) {
+            const auto ori = oit();
+            if ((bctype[ori] != BC::mass_inflow) &&
+                (bctype[ori] != BC::mass_inflow_outflow)) {
+                continue;
+            }
+
+            const int idir = ori.coordDir();
+            const auto& domain_box = geom.Domain();
+            for (int fdir = 0; fdir < AMREX_SPACEDIM; ++fdir) {
+
+                // Only face-normal velocities populated here
+                if (idir != fdir) {
+                    continue;
+                }
+                const auto& dbx = ori.isLow() ? amrex::bdryLo(domain_box, idir)
+                                              : amrex::bdryHi(domain_box, idir);
+
+#ifdef AMREX_USE_OMP
+#pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
+#endif
+                auto& mfab = *mfabs[fdir];
+                for (amrex::MFIter mfi(mfab); mfi.isValid(); ++mfi) {
+                    const auto& vbx = mfi.validbox();
+                    const auto& bx = vbx & dbx;
+                    if (!bx.ok()) {
+                        continue;
+                    }
+
+                    const auto& marr = mfab[mfi].array();
+                    amrex::FArrayBox tmp_fab(
+                        bx, mfab.nComp(), amrex::The_Async_Arena());
+                    amrex::Array4<amrex::Real> const& tmp_marr =
+                        tmp_fab.array();
+
+                    amrex::ParallelFor(
+                        bx,
+                        [=] AMREX_GPU_DEVICE(
+                            const int i, const int j, const int k) noexcept {
+                            bcfunc.set_inflow(
+                                {i, j, k}, tmp_marr, gdata, time, ori, 0, 0,
+                                fdir);
+
+                            const bool is_outflow =
+                                (ori.isLow() && tmp_marr(i, j, k) < 0) ||
+                                (ori.isHigh() && tmp_marr(i, j, k) > 0);
+                            if ((bctype[ori] == BC::mass_inflow_outflow) &&
+                                is_outflow) {
+                                marr(i, j, k) = marr(i, j, k);
+                            } else {
+                                marr(i, j, k) = tmp_marr(i, j, k);
+                            }
+                        });
+                }
+            }
+        }
+    }
+
 protected:
     Functor bc_functor() { return m_op(); }
+
+    Functor bc_functor_face(const int face_dir) { return m_op(face_dir); }
 
     void check_face_mapper()
     {

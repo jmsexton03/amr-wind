@@ -33,7 +33,7 @@ private:
     const Field& m_temperature;
     const Field* m_vof;
 
-    amrex::Vector<amrex::Real> m_gravity{{0.0, 0.0, -9.81}};
+    amrex::Vector<amrex::Real> m_gravity{0.0, 0.0, -9.81};
 
     //! Reference temperature (Kelvin)
     amrex::Real m_ref_theta{300.0};
@@ -42,7 +42,7 @@ private:
     amrex::Real m_beta{0.0};
 
     //! Check for VOF
-    bool is_vof{false};
+    bool m_is_vof{false};
 };
 } // namespace amr_wind::pde::icns
 
